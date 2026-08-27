@@ -376,6 +376,11 @@ def run_clone_manager(model_key):
     else:
         return
 
+    print("\nVoice Instruction (timbre / emotion / prosody), e.g. 'deep and calm, speaking slowly':")
+    for ex in EMOTION_EXAMPLES:
+        print(f"  - {ex}")
+    instruct = input("Instruction (blank = none): ").strip() or None
+
     while True:
         text = get_safe_input(f"\nText for '{os.path.basename(str(ref_audio))}' (or 'exit'): ")
         if text is None:
@@ -383,8 +388,8 @@ def run_clone_manager(model_key):
         print("Cloning...")
         temp_dir = make_temp_dir()
         try:
-            generate_audio(model=model, text=text, ref_audio=ref_audio, 
-                         ref_text=ref_text, output_path=temp_dir)
+            generate_audio(model=model, text=text, ref_audio=ref_audio,
+                         ref_text=ref_text, instruct=instruct, output_path=temp_dir)
             save_audio_file(temp_dir, info["output_subfolder"], text)
         except Exception as e:
             print(f"Error: {e}")
