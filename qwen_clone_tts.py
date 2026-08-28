@@ -75,11 +75,57 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS) -> list[str]:
     return chunks
 
 
+SOCK_PATH = "/tmp/qwen_tts_daemon.sock"
+DAEMON_TIMEOUT_S = 600.0        # รอผล generation นานสุด 10 นาที
+DAEMON_CONNECT_TIMEOUT_S = 5.0  # connect socket ต้องเร็ว
+
+
+def _try_daemon(text: str, out_path: str, instruct: str | None,
+                voice: str = "Liino") -> bool:
+    """ส่งงานผ่าน tts_daemon ถ้ารันอยู่ — คืน False ถ้า daemon ไม่พร้อม"""
+    import json as _json
+    import socket as _socket
+    if not os.path.exists(SOCK_PATH):
+        return False
+    try:
+        sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        # connect เร็ว (daemon ควรตอบทันทีว่าพร้อมหรือไม่) แต่รอผล gen ได้นาน
+        sock.settimeout(DAEMON_CONNECT_TIMEOUT_S)
+        sock.connect(SOCK_PATH)
+        sock.sendall((_json.dumps(
+            {"text": text, "instruct": instruct, "out_path": out_path,
+             "voice": voice}) + "\n").encode("utf-8"))
+        sock.settimeout(DAEMON_TIMEOUT_S)
+        buf = b""
+        while not buf.endswith(b"\n"):
+            data = sock.recv(65536)
+            if not data:
+                break
+            buf += data
+        sock.close()
+        resp = _json.loads(buf.decode("utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not resp.get("ok"):
+        print(f"ERROR: daemon failed: {resp.get('error')}", file=sys.stderr)
+        return False
+    tag = " (cached)" if resp.get("cached") else ""
+    print(f"OK {resp['out_path']}")
+    print(f"TIMING via daemon gen={resp.get('gen_s', 0):.2f}s{tag}",
+          file=sys.stderr)
+    return True
+
+
 def _run(voice: str, text: str, out_path: str, instruct: str | None) -> int:
     ref_audio = os.path.join(VOICES_DIR, f"{voice}.wav")
     if not os.path.exists(ref_audio):
         print(f"ERROR: ref voice not found: {ref_audio}", file=sys.stderr)
         return 1
+
+    # ลอง daemon ก่อน (ไม่ต้องโหลดโมเดล) — ถ้าไม่รัน fallback โหลดเอง
+    if _try_daemon(text, out_path, instruct, voice):
+        return 0
+
     ref_text = None
     txt_path = os.path.join(VOICES_DIR, f"{voice}.txt")
     if os.path.exists(txt_path):

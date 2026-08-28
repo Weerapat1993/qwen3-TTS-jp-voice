@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.liino.qwen-tts-daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/.venv/bin/python</string>
+        <string>/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/tts_daemon.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/qwen_tts_daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/qwen_tts_daemon.err.log</string>
+    <key>Nice</key>
+    <integer>5</integer>
+</dict>
+</plist>
