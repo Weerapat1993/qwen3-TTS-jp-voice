@@ -81,7 +81,7 @@ DAEMON_CONNECT_TIMEOUT_S = 5.0  # connect socket ต้องเร็ว
 
 
 def _try_daemon(text: str, out_path: str, instruct: str | None,
-                voice: str = "Liino") -> bool:
+                voice: str = "Liino", fmt: str = "wav") -> bool:
     """ส่งงานผ่าน tts_daemon ถ้ารันอยู่ — คืน False ถ้า daemon ไม่พร้อม"""
     import json as _json
     import socket as _socket
@@ -94,7 +94,7 @@ def _try_daemon(text: str, out_path: str, instruct: str | None,
         sock.connect(SOCK_PATH)
         sock.sendall((_json.dumps(
             {"text": text, "instruct": instruct, "out_path": out_path,
-             "voice": voice}) + "\n").encode("utf-8"))
+             "voice": voice, "format": fmt}) + "\n").encode("utf-8"))
         sock.settimeout(DAEMON_TIMEOUT_S)
         buf = b""
         while not buf.endswith(b"\n"):
@@ -118,14 +118,35 @@ def _try_daemon(text: str, out_path: str, instruct: str | None,
     return True
 
 
-def _run(voice: str, text: str, out_path: str, instruct: str | None) -> int:
+def _convert_to_mp3(path: str) -> str:
+    """แปลงไฟล์เสียงเป็น .mp3 ด้วย ffmpeg — คืน path ของ mp3"""
+    import shutil as _shutil
+    import subprocess as _sub
+    if _shutil.which("ffmpeg") is None:
+        print("ERROR: ffmpeg not found for mp3 convert", file=sys.stderr)
+        return path
+    base, _ = os.path.splitext(path)
+    mp3_path = base + ".mp3"
+    r = _sub.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-i", path, "-codec:a", "libmp3lame", "-qscale:a", "4", mp3_path],
+        capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(mp3_path):
+        print(f"ERROR: ffmpeg mp3 convert failed: {r.stderr}", file=sys.stderr)
+        return path
+    return mp3_path
+
+
+def _run(voice: str, text: str, out_path: str, instruct: str | None,
+         mp3: bool = False) -> int:
     ref_audio = os.path.join(VOICES_DIR, f"{voice}.wav")
     if not os.path.exists(ref_audio):
         print(f"ERROR: ref voice not found: {ref_audio}", file=sys.stderr)
         return 1
 
     # ลอง daemon ก่อน (ไม่ต้องโหลดโมเดล) — ถ้าไม่รัน fallback โหลดเอง
-    if _try_daemon(text, out_path, instruct, voice):
+    if _try_daemon(text, out_path, instruct, voice,
+                   fmt="mp3" if mp3 else "wav"):
         return 0
 
     ref_text = None
@@ -135,10 +156,11 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None) -> int:
             ref_text = f.read().strip()
 
     chunks = chunk_text(text)
-    multi = len(chunks) > 1
-    if multi:
-        print(f"NOTE: {len(text)} chars -> {len(chunks)} chunks",
-              file=sys.stderr)
+    if len(text) > MAX_CHARS:
+        print(f"ERROR: text is {len(text)} chars — max is {MAX_CHARS} "
+              f"(long-text chunking is disabled)", file=sys.stderr)
+        return 1
+    multi = False
 
     t0 = time.time()
     from mlx_audio.tts.utils import load_model
@@ -220,7 +242,11 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None) -> int:
 
     gen_s = time.time() - t1
 
-    print(f"OK {final}")
+    final_out = final
+    if mp3:
+        final_out = _convert_to_mp3(final)
+
+    print(f"OK {final_out}")
     print(f"TIMING load={load_s:.1f}s gen={gen_s:.1f}s", file=sys.stderr)
     return 0
 
@@ -244,12 +270,15 @@ def main() -> int:
             print("ERROR: empty input", file=sys.stderr)
             return 1
         instruct = DEFAULT_INSTRUCT_LONG if instruct_long else DEFAULT_INSTRUCT
-        return _run("Liino", text, out_path, instruct)
+        return _run("Liino", text, out_path, instruct,
+                    mp3="--mp3" in rest)
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--text", required=True, help="ข้อความที่จะให้อ่าน")
     ap.add_argument("--voice", default="Liino", help="ชื่อเสียงโคลนใน voices/")
     ap.add_argument("--out", default=None, help="ไฟล์ .wav ปลายทาง")
+    ap.add_argument("--mp3", action="store_true",
+                    help="แปลงผลลัพธ์เป็น .mp3 (ffmpeg libmp3lame)")
     ap.add_argument("--instruct", default=None,
                     help="คำบรรยายน้ำเสียง เช่น 'cheerful idol voice'")
     ap.add_argument("--instruct-long", action="store_true",
@@ -261,7 +290,7 @@ def main() -> int:
         instruct = DEFAULT_INSTRUCT_LONG
     else:
         instruct = args.instruct
-    return _run(args.voice, args.text, out_path, instruct)
+    return _run(args.voice, args.text, out_path, instruct, mp3=args.mp3)
 
 
 if __name__ == "__main__":

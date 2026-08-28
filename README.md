@@ -156,6 +156,19 @@ Response ของ daemon มี field `queue_wait_s` (เวลารอคิ�
 (`qwen_clone_tts.py`) พิมพ์รวมใน TIMING เช่น
 `TIMING via daemon gen=3.20s queue_wait=0.01s`
 
+### Phase 4 (Performance & Stability)
+
+- **จำกัดความยาวข้อความ 300 ตัวอักษร** — ข้อความยาวเกินถูกปฏิเสธทันที
+  (daemon ตอบ error ก่อนเข้าคิว, local mode พิมพ์ ERROR) — long-text
+  chunking ถูกปิด feature แล้ว
+- **MP3 output** — ส่ง `"format": "mp3"` ใน request (หรือ flag `--mp3`
+  ใน client) เพื่อแปลงผลลัพธ์เป็น mp3 ด้วย ffmpeg (libmp3lame -q:a 4) —
+  generate เป็น wav ครั้งเดียวแล้วแปลงจาก cache ไม่ generate ซ้ำ
+- **Idle unload** — ตั้ง `TTS_IDLE_UNLOAD` (วินาที, default 0 = ปิด):
+  ถ้าไม่มี request ติดต่อกันเกินค่านี้ daemon จะปล่อย model ออกจาก RAM
+  (~6.7GB) แล้วโหลดใหม่อัตโนมัติเมื่อมี request ถัดไป (โหลดใหม่ ~3s);
+  cache hit ยังทำงานได้ทันทีแม้ model ถูก unload
+
 ### Priority (nice / Process QoS)
 
 `launchd/com.liino.qwen-tts-daemon.plist` รัน daemon ที่ nice 0 ปกติ (ไม่มี

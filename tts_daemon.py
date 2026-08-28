@@ -2,9 +2,11 @@
 """Qwen3-TTS daemon — โหลดโมเดลครั้งเดียว รับ request ผ่าน Unix domain socket
 
 Protocol (JSON บรรทัดเดียว จบด้วย newline):
-    request : {"text": str, "instruct": str|null, "out_path": str, "voice": str?}
+    request : {"text": str, "instruct": str|null, "out_path": str, "voice": str?,
+               "format": "wav"|"mp3"?}
     response: {"ok": bool, "out_path": str, "gen_s": float,
-               "error": str|null, "cached": bool, "queue_wait_s": float}
+               "error": str|null, "cached": bool, "queue_wait_s": float,
+               "format": "wav"|"mp3"}
 
 FIFO queue + timeout: งานจัดคิวแบบ FIFO ทีละงาน (serial, atomic — งานที่
 generate อยู่จะไม่ถูกยกเลิกกลางทาง) ถ้างานถูกประเมินว่าต้องรอคิวเกิน
@@ -16,10 +18,14 @@ Config ผ่าน environment variables:
     TTS_CACHE_DIR       cache dir     (default ~/.cache/qwen_tts)
     TTS_QUEUE_TIMEOUT   วินาที        (default 60)
     TTS_TELEMETRY_LOG   JSONL log     (default ~/Library/Logs/qwen_tts_daemon.log)
+    TTS_IDLE_UNLOAD     วินาที        (default 0 = ปิด) — ถ้าไม่มี request
+                        นานเกินค่านี้ จะ unload โมเดลเพื่อคืน memory
+                        (request ถัดไปโหลดใหม่อัตโนมัติ ~3s)
 
 รัน: .venv/bin/python tts_daemon.py
 """
 import hashlib
+import gc
 import json
 import os
 import queue
@@ -44,6 +50,7 @@ QUEUE_TIMEOUT = float(os.environ.get("TTS_QUEUE_TIMEOUT", "60"))
 TELEMETRY_LOG = os.environ.get(
     "TTS_TELEMETRY_LOG",
     os.path.expanduser("~/Library/Logs/qwen_tts_daemon.log"))
+IDLE_UNLOAD = float(os.environ.get("TTS_IDLE_UNLOAD", "0"))
 
 _running = True
 _log_lock = threading.Lock()
@@ -54,10 +61,49 @@ def _on_signal(signum, frame):
     _running = False
 
 
+def _load_model() -> object:  # noqa: ANN202
+    from mlx_audio.tts.utils import load_model
+    return load_model(MODEL_PATH)  # type: ignore[arg-type]
+
+
+def _ensure_model(holder: dict):
+    """lazy reload — ถ้า model ถูก idle-unload ไปแล้วโหลดใหม่"""
+    if holder.get("model") is None:
+        t0 = time.time()
+        holder["model"] = _load_model()
+        log_event("model_reload", reload_s=round(time.time() - t0, 2))
+        print(f"daemon: model reloaded in {time.time() - t0:.1f}s",
+              file=sys.stderr, flush=True)
+    return holder["model"]
+
+
+def _unload_model(holder: dict) -> None:
+    """คืน memory: ลบ reference + gc + mlx metal cache"""
+    holder["model"] = None
+    gc.collect()
+    try:
+        import mlx.core as mx
+        mx.metal.clear_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _cache_key(text: str, instruct: str | None, voice: str) -> str:
     h = hashlib.sha256()
     h.update(f"{voice}\x00{text}\x00{instruct or ''}".encode("utf-8"))
     return h.hexdigest()
+
+
+def _convert_mp3(src_wav: str, dst_mp3: str) -> None:
+    """แปลง wav -> mp3 ด้วย ffmpeg (libmp3lame -qscale:a 4)"""
+    os.makedirs(os.path.dirname(dst_mp3) or ".", exist_ok=True)
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-i", src_wav, "-codec:a", "libmp3lame", "-qscale:a", "4",
+         dst_mp3],
+        capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(dst_mp3):
+        raise RuntimeError(f"ffmpeg mp3 convert failed: {r.stderr}")
 
 
 def _load_snapshot() -> dict:
@@ -108,14 +154,19 @@ def _resolve_audio_path(path: str) -> str | None:
     return path if os.path.exists(path) else None
 
 
-def _generate(model, ref_audio: str, ref_text: str | None, text: str,
+def _generate(model_holder, ref_audio: str, ref_text: str | None, text: str,
               instruct: str | None, out_path: str) -> float:
-    """generate เสียง 1 ชิ้น (chunk เองถ้ายาว) คืนเวลา gen เป็นวินาที"""
+    """generate เสียง 1 ชิ้น (chunk เองถ้ายาว) คืนเวลา gen เป็นวินาที
+
+    model_holder คือ dict {"model": ...} — ถ้า idle-unload ไปแล้วจะโหลดใหม่
+    lazy ที่นี่ (cache hit ไม่ผ่านฟังก์ชันนี้ จึงไม่ต้องโหลด model)
+    """
     import contextlib
     import io
 
     from mlx_audio.tts.generate import generate_audio
 
+    model = _ensure_model(model_holder)
     chunks = chunk_text(text, MAX_CHARS)
     multi = len(chunks) > 1
     t1 = time.time()
@@ -168,13 +219,28 @@ def _generate(model, ref_audio: str, ref_text: str | None, text: str,
     return time.time() - t1
 
 
-def handle_request(model, req: dict, queue_wait_s: float = 0.0) -> dict:
-    """process งาน 1 ชิ้น (atomic — ไม่ยอมรับงานใหม่ระหว่างทำ)"""
+def handle_request(model_holder, req: dict, queue_wait_s: float = 0.0) -> dict:
+    """process งาน 1 ชิ้น (atomic — ไม่ยอมรับงานใหม่ระหว่างทำ)
+
+    model_holder: dict {"model": ...} — เพื่อให้ lazy reload ได้เมื่อ
+    idle-unload ปล่อย model ไปแล้ว (ถือ dict ไม่ยึด reference โมเดลตรง ๆ)
+    """
     t_start = time.time()
     text = req.get("text", "")
     instruct = req.get("instruct")
     out_path = req.get("out_path")
     voice = req.get("voice", "Liino")
+    fmt = req.get("format", "wav")
+    if fmt not in ("wav", "mp3"):
+        fmt = "wav"
+    if len(text) > MAX_CHARS:
+        # ข้อความยาวปิด feature แล้ว — ปฏิเสธพร้อม error ชัดเจน
+        return {"ok": False, "out_path": out_path or "",
+                "gen_s": 0.0,
+                "error": f"text is {len(text)} chars — max is {MAX_CHARS} "
+                         f"(long-text chunking is disabled)",
+                "cached": False, "queue_wait_s": round(queue_wait_s, 2),
+                "format": fmt}
     log_event("request", text_len=len(text),
               queue_wait_s=round(queue_wait_s, 2))
 
@@ -192,7 +258,7 @@ def handle_request(model, req: dict, queue_wait_s: float = 0.0) -> dict:
                       error=error)
         return {"ok": ok, "out_path": out_path or "",
                 "gen_s": round(gen_s, 2), "error": error, "cached": cached,
-                "queue_wait_s": round(queue_wait_s, 2)}
+                "queue_wait_s": round(queue_wait_s, 2), "format": fmt}
 
     if not text or not out_path:
         return resp(False, 0.0, "text and out_path are required")
@@ -206,21 +272,43 @@ def handle_request(model, req: dict, queue_wait_s: float = 0.0) -> dict:
         with open(txt_path, "r", encoding="utf-8") as f:
             ref_text = f.read().strip()
 
-    # cache hit -> copy ทันที
+    # cache hit -> ใช้ไฟล์ cache ทันที (key เป็น wav; mp3 แปลงจาก wav cache)
     os.makedirs(CACHE_DIR, exist_ok=True)
-    cached_file = os.path.join(CACHE_DIR, _cache_key(text, instruct, voice)
-                               + os.path.splitext(out_path)[1] or ".wav")
-    if os.path.exists(cached_file):
+    key = _cache_key(text, instruct, voice)
+    cached_wav = os.path.join(CACHE_DIR, key + ".wav")
+    out_ext = os.path.splitext(out_path)[1].lower()
+    # mp3 จะ generate เป็น wav ใน out_path ก่อน (ถ้าขอ .mp3) แล้วแปลงทีหลัง
+    gen_path = out_path if fmt == "wav" else (
+        out_path[:-len(out_ext)] + ".wav" if out_ext == ".mp3"
+        else out_path + ".wav")
+
+    if fmt == "mp3" and out_path.endswith(".mp3"):
+        cached_mp3 = os.path.join(CACHE_DIR, key + ".mp3")
+        if os.path.exists(cached_mp3):
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            shutil.copy2(cached_mp3, out_path)
+            return resp(True, 0.0, None, cached=True)
+    if os.path.exists(cached_wav):
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-        shutil.copy2(cached_file, out_path)
+        if fmt == "mp3" and out_path.endswith(".mp3"):
+            _convert_mp3(cached_wav, out_path)
+        else:
+            shutil.copy2(cached_wav, out_path)
         return resp(True, 0.0, None, cached=True)
 
     try:
-        gen_s = _generate(model, ref_audio, ref_text, text, instruct,
-                          out_path)
+        gen_s = _generate(model_holder, ref_audio, ref_text, text, instruct,
+                          gen_path)
     except Exception as e:  # noqa: BLE001
         return resp(False, 0.0, str(e))
-    shutil.copy2(out_path, cached_file)
+    try:
+        shutil.copy2(gen_path, cached_wav)
+        if fmt == "mp3" and out_path.endswith(".mp3"):
+            _convert_mp3(gen_path, out_path)
+            cached_mp3 = os.path.join(CACHE_DIR, key + ".mp3")
+            shutil.copy2(out_path, cached_mp3)
+    except Exception as e:  # noqa: BLE001
+        return resp(False, gen_s, str(e))
     _update_est_job_s(gen_s)
     return resp(True, gen_s, None)
 
@@ -274,12 +362,41 @@ def main() -> int:
         os.unlink(SOCK_PATH)
 
     t0 = time.time()
-    from mlx_audio.tts.utils import load_model
-    model = load_model(MODEL_PATH)
+    model_holder: dict = {"model": _load_model()}
     print(f"daemon: model loaded in {time.time() - t0:.1f}s",
           file=sys.stderr, flush=True)
     log_event("startup", sock=SOCK_PATH, queue_timeout_s=QUEUE_TIMEOUT,
-              telemetry_log=TELEMETRY_LOG)
+              telemetry_log=TELEMETRY_LOG, idle_unload_s=IDLE_UNLOAD)
+
+    # ---- idle unload: ถ้าเปิด feature และไม่มี request นานเกินไป คืน memory
+    # ห้าม unload ขณะ worker กำลัง generate หรือคิวมีงานค้าง — ไม่งั้นจะ
+    # ยกเลิกงานกลางทาง / แย่ง memory กับงานที่กำลังรัน (บั๊กที่พบตอน test
+    # ข้อความใหญ่: model_unload ยิงระหว่าง generate ทำให้ request ค้าง)
+    _last_request_t = time.time()
+    _worker_busy = {"flag": False}
+
+    def idle_watch() -> None:
+        nonlocal _last_request_t
+        while _running:
+            time.sleep(1.0)
+            if IDLE_UNLOAD > 0 and model_holder.get("model") is not None \
+                    and not _worker_busy["flag"] \
+                    and time.time() - _last_request_t > IDLE_UNLOAD:
+                rss_mb = 0.0
+                try:
+                    with open("/proc/self/statm") as f:
+                        rss_mb = int(f.read().split()[1]) * 4096 / 1e6
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                _unload_model(model_holder)
+                _last_request_t = time.time()
+                log_event("model_unload", idle_s=IDLE_UNLOAD,
+                          rss_before_mb=round(rss_mb, 1))
+                print(f"daemon: model unloaded after {IDLE_UNLOAD:.0f}s idle",
+                      file=sys.stderr, flush=True)
+
+    if IDLE_UNLOAD > 0:
+        threading.Thread(target=idle_watch, daemon=True).start()
 
     # ---- worker thread: ดึงงานจาก FIFO queue ทีละงาน (atomic) ----
     q: queue.Queue = queue.Queue()
@@ -296,6 +413,8 @@ def main() -> int:
             req, t_enq = item
             with q_lock:
                 q_depth -= 1
+            _worker_busy["flag"] = True
+            _last_request_t = time.time()  # งานเริ่มรัน = ไม่ idle
             wait_s = time.time() - t_enq
             if wait_s > QUEUE_TIMEOUT:
                 # รอคิวเกิน timeout — ตอบ error ทันที ไม่ generate (งานที่
@@ -309,7 +428,8 @@ def main() -> int:
                             {"ok": False, "out_path": req.get("out_path", ""),
                              "gen_s": 0.0, "error": "queue timeout",
                              "cached": False,
-                             "queue_wait_s": round(wait_s, 2)},
+                             "queue_wait_s": round(wait_s, 2),
+                             "format": req.get("format", "wav")},
                             ensure_ascii=False) + "\n").encode("utf-8"))
                     except OSError:
                         pass
@@ -320,11 +440,12 @@ def main() -> int:
                             pass
                 continue
             try:
-                resp = handle_request(model, req, queue_wait_s=wait_s)
+                resp = handle_request(model_holder, req, queue_wait_s=wait_s)
             except Exception as e:  # noqa: BLE001
                 resp = {"ok": False, "out_path": req.get("out_path", ""),
                         "gen_s": 0.0, "error": str(e), "cached": False,
-                        "queue_wait_s": round(wait_s, 2)}
+                        "queue_wait_s": round(wait_s, 2),
+                        "format": req.get("format", "wav")}
                 log_event("error", text_len=len(req.get("text", "")),
                           error=str(e))
             conn = req.pop("_conn", None)
@@ -339,6 +460,8 @@ def main() -> int:
                         conn.close()
                     except OSError:
                         pass
+            _worker_busy["flag"] = False
+            _last_request_t = time.time()  # งานจบ — เริ่มนับ idle ใหม่
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -354,6 +477,10 @@ def main() -> int:
         except OSError:
             pass
 
+    def _err(resp_dict: dict) -> dict:
+        resp_dict.setdefault("format", "wav")
+        return resp_dict
+
     try:
         srv.settimeout(0.5)
         while _running:
@@ -363,19 +490,28 @@ def main() -> int:
                 continue
             with conn:
                 buf = b""
+                # อ่านจนครบบรรทัด (รองรับ request JSON ใหญ่ ~50KB+)
                 while not buf.endswith(b"\n"):
-                    data = conn.recv(65536)
+                    try:
+                        data = conn.recv(65536)
+                    except (socket.timeout, OSError):
+                        break
                     if not data:
                         break
                     buf += data
                 if not buf.strip():
+                    # client หลุดก่อนส่งครบ — ไม่มีงานค้างในคิว
+                    log_event("client_disconnect", stage="recv",
+                              bytes_read=len(buf))
                     continue
                 try:
                     req = json.loads(buf.decode("utf-8"))
                 except json.JSONDecodeError as e:
-                    send(conn, {"ok": False, "out_path": "", "gen_s": 0.0,
-                                "error": f"bad json: {e}", "cached": False,
-                                "queue_wait_s": 0.0})
+                    send(conn, _err({"ok": False, "out_path": "",
+                                     "gen_s": 0.0,
+                                     "error": f"bad json: {e}",
+                                     "cached": False,
+                                     "queue_wait_s": 0.0}))
                     continue
 
                 with q_lock:
@@ -385,10 +521,10 @@ def main() -> int:
                 if depth > 0 and depth * _est_job_s() > QUEUE_TIMEOUT:
                     log_event("error", text_len=len(req.get("text", "")),
                               error="queue timeout", queue_depth=depth)
-                    send(conn, {"ok": False,
-                                "out_path": req.get("out_path", ""),
-                                "gen_s": 0.0, "error": "queue timeout",
-                                "cached": False, "queue_wait_s": 0.0})
+                    send(conn, _err({"ok": False,
+                                     "out_path": req.get("out_path", ""),
+                                     "gen_s": 0.0, "error": "queue timeout",
+                                     "cached": False, "queue_wait_s": 0.0}))
                     continue
 
                 # dup socket กัน (with conn จะปิดตอนออกจาก block) แล้ว
@@ -397,6 +533,7 @@ def main() -> int:
                 with q_lock:
                     q_depth += 1
                 q.put((req, time.time()))  # FIFO enqueue
+                _last_request_t = time.time()
     finally:
         srv.close()
         if os.path.exists(SOCK_PATH):
