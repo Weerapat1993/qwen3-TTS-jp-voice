@@ -111,7 +111,9 @@ def _try_daemon(text: str, out_path: str, instruct: str | None,
         return False
     tag = " (cached)" if resp.get("cached") else ""
     print(f"OK {resp['out_path']}")
-    print(f"TIMING via daemon gen={resp.get('gen_s', 0):.2f}s{tag}",
+    qw = resp.get("queue_wait_s")
+    qw_s = f" queue_wait={qw:.2f}s" if isinstance(qw, (int, float)) else ""
+    print(f"TIMING via daemon gen={resp.get('gen_s', 0):.2f}s{qw_s}{tag}",
           file=sys.stderr)
     return True
 

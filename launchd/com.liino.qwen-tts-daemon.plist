@@ -4,6 +4,12 @@
 <dict>
     <key>Label</key>
     <string>com.liino.qwen-tts-daemon</string>
+    <!-- daemon รันที่ nice 0 ปกติ (ไม่ใช้ nice wrapper)
+         หมายเหตุ: nice ค่าลบ (เช่น -5, ให้ daemon สำคัญกว่า process อื่น)
+         ต้องสิทธิ์ root — launchd user agent (~/Library/LaunchAgents) ทำไม่ได้
+         ถ้าต้องการ -5 จริง ต้องย้าย plist ไป /Library/LaunchDaemons
+         และรันเป็น system daemon ผ่าน sudo (sudo launchctl load /Library/LaunchDaemons/...)
+         ทางเลือกแนะนำในบริบท GPU-bound: ดูหัวข้อ "Priority" ใน README -->
     <key>ProgramArguments</key>
     <array>
         <string>/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/.venv/bin/python</string>
@@ -17,7 +23,5 @@
     <string>/tmp/qwen_tts_daemon.log</string>
     <key>StandardErrorPath</key>
     <string>/tmp/qwen_tts_daemon.err.log</string>
-    <key>Nice</key>
-    <integer>5</integer>
 </dict>
 </plist>

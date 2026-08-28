@@ -138,6 +138,44 @@ Select:
 
 ---
 
+## Daemon (tts_daemon.py)
+
+โหลดโมเดลครั้งเดียว รับงานผ่าน Unix socket, จัดคิว FIFO ทีละงาน (atomic —
+งานที่ generate อยู่ไม่ถูกยกเลิก), มี cache และ telemetry log (JSON lines)
+
+### Config (environment variables)
+
+| Var | Default | คำอธิบาย |
+|-----|---------|----------|
+| `TTS_DAEMON_SOCK` | `/tmp/qwen_tts_daemon.sock` | Unix socket path |
+| `TTS_CACHE_DIR` | `~/.cache/qwen_tts` | audio cache dir |
+| `TTS_QUEUE_TIMEOUT` | `60` | วินาที — งานที่ประเมินว่าต้องรอคิวเกินค่านี้จะถูกตอบ error `queue timeout` ทันที |
+| `TTS_TELEMETRY_LOG` | `~/Library/Logs/qwen_tts_daemon.log` | JSONL log (timestamp, event=request/cache_hit/complete/error, text_len, gen_s, total_s, queue_wait_s, load snapshot จาก os.getloadavg + ps) |
+
+Response ของ daemon มี field `queue_wait_s` (เวลารอคิว) — client
+(`qwen_clone_tts.py`) พิมพ์รวมใน TIMING เช่น
+`TIMING via daemon gen=3.20s queue_wait=0.01s`
+
+### Priority (nice / Process QoS)
+
+`launchd/com.liino.qwen-tts-daemon.plist` รัน daemon ที่ nice 0 ปกติ (ไม่มี
+nice wrapper) เพราะ nice ค่าลบ (ให้ daemon สำคัญกว่า process อื่น เช่น -5)
+ต้องสิทธิ์ root — launchd user agent (~/Library/LaunchAgents) ทำไม่ได้ ถ้า
+ต้องการ -5 จริง ต้องย้าย plist ไป /Library/LaunchDaemons และรันเป็น system
+daemon ผ่าน sudo (sudo launchctl load /Library/LaunchDaemons/…)
+
+แนวทางแทน: daemon ตั้ง macOS Process QoS เป็น `user-initiated` ด้วย
+`taskpolicy -s policy user-initiated` ตอน start (best-effort — ถ้าเรียกไม่สำเร็จ
+จะรันต่อที่ QoS default โดยไม่ fail)
+
+หมายเหตุสำคัญในบริบทนี้: Qwen3-TTS เป็นงาน GPU-bound (Metal) — macOS จัดสรร
+GPU ให้ foreground app ก่อนเสมอ การ nice หรือ QoS มีผลกับ CPU เท่านั้น วิธี
+ที่ได้ผลจริงคือลด load จาก app อื่น (Chrome tab, Discord ฯลฯ) มากกว่าการ
+ปรับ nice ของ daemon
+(ห้ามลืม: แก้ plist แล้วต้อง reinstall service เอง — script นี้ไม่ start ให้)
+
+---
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/chart?repos=kapi2800/qwen3-tts-apple-silicon&type=date&legend=top-left)](https://www.star-history.com/?repos=kapi2800%2Fqwen3-tts-apple-silicon&type=date&legend=top-left)
