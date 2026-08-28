@@ -19,7 +19,9 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 VOICES_DIR = os.path.join(PROJ, "voices")
 MODEL_PATH = os.path.join(PROJ, "models", "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 MAX_CHARS = 300
-DEFAULT_INSTRUCT = (
+DEFAULT_INSTRUCT = "Cheerful, bright, playful young female voice. Clear and friendly, natural pace, not childish."
+# Instruct เดิม (ยาว) — เสียงสไตล์เดิม ใช้ผ่าน --instruct-long หรือ --instruct แบบระบุเอง
+DEFAULT_INSTRUCT_LONG = (
     "A youthful Japanese female anime game character voice. "
     "Clear, bright, soft, and feminine timbre with a slightly high pitch. "
     "She sounds cheerful, lively, curious, and friendly, with a subtle "
@@ -106,10 +108,16 @@ def main() -> int:
     ap.add_argument("--out", default=None, help="ไฟล์ .wav ปลายทาง")
     ap.add_argument("--instruct", default=None,
                     help="คำบรรยายน้ำเสียง เช่น 'cheerful idol voice'")
+    ap.add_argument("--instruct-long", action="store_true",
+                    help="ใช้ instruct ยาวสไตล์เดิม (full_default)")
     args = ap.parse_args()
     out_path = args.out or os.path.join(
         tempfile.gettempdir(), "qwen_clone_out.wav")
-    return _run(args.voice, args.text, out_path, args.instruct)
+    if args.instruct_long:
+        instruct = DEFAULT_INSTRUCT_LONG
+    else:
+        instruct = args.instruct
+    return _run(args.voice, args.text, out_path, instruct)
 
 
 if __name__ == "__main__":
