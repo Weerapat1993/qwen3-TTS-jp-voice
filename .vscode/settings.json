@@ -1,0 +1,16 @@
+{
+  "files.watcherExclude": {
+    "**/models/**": true,
+    "**/outputs/**": true,
+    "**/.venv/**": true,
+    "**/__pycache__/**": true
+  },
+  "search.exclude": {
+    "**/models/**": true,
+    "**/outputs/**": true,
+    "**/.venv/**": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true
+  }
+}
