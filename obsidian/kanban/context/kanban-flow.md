@@ -2,6 +2,14 @@
 
 ใช้ไฟล์นี้เป็น workflow กลางเมื่อสั่ง AI ให้ทำ ticket ใน `obsidian/kanban/tasks/`
 
+## Skill Discovery (multi-tool)
+
+Skill instructions ตัวจริงอยู่ที่เดียวคือ `.claude/skills/kanban/SKILL.md` (+ `cmd/*.md`) ห้ามแก้ไข copy ซ้ำที่อื่น
+
+- Claude Code อ่าน `.claude/skills/kanban/` ตรง ๆ
+- opencode อ่าน `.claude/skills/<name>/SKILL.md` ได้เองอยู่แล้ว (compat path ในตัว) ไม่ต้องเพิ่มอะไร
+- codex ไม่รู้จัก `.claude/skills` มันมองหาแค่ `.agents/skills/<name>/SKILL.md` เท่านั้น เลยมี `.agents/skills/kanban` เป็น symlink ชี้กลับไปที่ `.claude/skills/kanban` (Codex resolve symlink ได้) ถ้าย้าย/ลบ skill ต้นทางต้องอัปเดต symlink นี้ด้วย
+
 ## Product-Level Reference
 
 โปรเจกต์นี้ไม่มี `prd.md` กลาง ใช้ `README.md` (root) เป็นแหล่งอ้างอิงภาพรวมของ scope, CLI reference, daemon protocol/config และ troubleshooting; `README_HERMES.md` (root) เป็นแหล่งอ้างอิงของ Hermes CLI / MCP bridge integration ที่แยกจาก TTS core flow ไม่มี `AGENTS.md` ในโปรเจกต์นี้
