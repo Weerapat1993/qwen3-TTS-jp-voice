@@ -239,6 +239,7 @@ This is a **text command**, not a Discord slash command, deliberately — to avo
 - The background daemon must be running (`tts_daemon.py`) — the bot **never** falls back to loading the model itself; if the daemon is down or fails, it replies with a clear error instead of hanging.
 - In the [Discord Developer Portal](https://discord.com/developers/applications), enable the privileged **Message Content Intent** for this bot application — without it, the bot cannot read the text of `?say` commands and will appear to simply not respond.
 - The bot needs `Connect` and `Speak` permissions in the target voice channel.
+- `DISCORD_BOT_TOKEN` must be exported as a real process environment variable — this project does **not** auto-load a `.env` file (config is env-var-only, no config file, same as `tts_daemon.py`). The `.env` at the repo root is unrelated tooling config (Notion token for the kanban skill), not read by any TTS script.
 
 ### Start it
 
@@ -246,7 +247,8 @@ This is a **text command**, not a Discord slash command, deliberately — to avo
 # make sure the daemon is running first
 .venv/bin/python tts_daemon.py &
 
-# then start the bot (reads DISCORD_BOT_TOKEN from .env / process env)
+# then start the bot (DISCORD_BOT_TOKEN must already be exported in this shell)
+export DISCORD_BOT_TOKEN=...
 .venv/bin/python discord_say_bot.py
 ```
 
@@ -264,7 +266,7 @@ This is a **text command**, not a Discord slash command, deliberately — to avo
 
 | Var | Default | Description |
 |-----|---------|--------------|
-| `DISCORD_BOT_TOKEN` | *(required, secret)* | Discord bot token — put it in `.env`, never hardcode or commit it |
+| `DISCORD_BOT_TOKEN` | *(required, secret)* | Discord bot token — export as a process env var, never hardcode or commit it (not auto-loaded from `.env`) |
 | `DISCORD_COMMAND_PREFIX` | `?` | Prefix for the bot's text commands |
 | `VC_IDLE_TIMEOUT_S` | `60` | Seconds to wait in an idle voice channel (empty queue, nothing playing) before disconnecting |
 

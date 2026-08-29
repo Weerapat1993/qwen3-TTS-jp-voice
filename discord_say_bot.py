@@ -8,7 +8,9 @@
 Usage:
     .venv/bin/python discord_say_bot.py
 
-ต้องตั้ง DISCORD_BOT_TOKEN ใน .env/process env ก่อนรัน และต้องเปิด privileged
+ต้อง export DISCORD_BOT_TOKEN เป็น process env var ก่อนรัน (โปรเจกต์นี้ไม่มีการโหลด
+.env อัตโนมัติ — ไฟล์ .env ที่มีอยู่ใน repo root ใช้สำหรับ NOTION_API_TOKEN ของ
+kanban tooling เท่านั้น ไม่เกี่ยวกับ script นี้) และต้องเปิด privileged
 "Message Content Intent" ใน Discord Developer Portal ของบอทนี้ (นอกเหนือจากโค้ด)
 ไม่งั้นบอทจะอ่านข้อความ prefix command ไม่ได้ (ดูเหมือน "ไม่ตอบสนอง" เฉยๆ)
 
@@ -183,8 +185,10 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
         return
     voice_channel = author_voice.channel
 
-    fd, wav_path = tempfile.mkstemp(prefix="qwen_say_", suffix=".wav")
-    os.close(fd)
+    # สร้างชื่อไฟล์ unique โดยไม่สร้างไฟล์ว่างล่วงหน้า — mlx_audio จะไม่เขียน
+    # ทับไฟล์ที่มีอยู่แล้ว (ทำให้ได้ไฟล์ 0 bytes เมื่อใช้ mkstemp)
+    wav_path = os.path.join(
+        tempfile.gettempdir(), f"qwen_say_{os.getpid()}_{int(time.time()*1000)}.wav")
 
     t0 = time.time()
     # TTS ผ่าน daemon fast path เท่านั้น — รันใน thread เสมอ ห้ามบล็อก event loop
@@ -213,8 +217,9 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
 
 def main() -> int:
     if not DISCORD_BOT_TOKEN:
-        print("ERROR: DISCORD_BOT_TOKEN is not set (put it in .env)",
-              file=sys.stderr)
+        print("ERROR: DISCORD_BOT_TOKEN is not set — export it as an "
+              "environment variable before running (no .env auto-load in "
+              "this project)", file=sys.stderr)
         return 1
     bot.run(DISCORD_BOT_TOKEN)
     return 0

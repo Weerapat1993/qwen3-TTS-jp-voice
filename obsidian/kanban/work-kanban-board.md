@@ -14,10 +14,10 @@ kanban-plugin: board
 
 ## REVIEW
 
-- [TTS-1001](tasks/TTS-1001.md): Prefix command ?say ให้บอทพูดใน voice channel ด้วยเสียง Liino
 
 ## DONE
 
+- [TTS-1001](tasks/TTS-1001.md): Prefix command ?say ให้บอทพูดใน voice channel ด้วยเสียง Liino
 ## CLOSED
 
 %% kanban:settings
