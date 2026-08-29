@@ -6,11 +6,11 @@ kanban-plugin: board
 
 ## BACKLOG
 
-- [TTS-1002](tasks/TTS-1002.md): ?say รับข้อความหลายบรรทัด (array) + auto mood จาก emoji
-
 ## TODO
 
 ## PLAN
+
+- [TTS-1002](tasks/TTS-1002.md): ?say รับข้อความหลายบรรทัด (array) + auto mood จาก emoji
 
 ## INPROGRESS
 
