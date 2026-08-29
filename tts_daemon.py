@@ -200,14 +200,25 @@ def _generate(model_holder, ref_audio: str, ref_text: str | None, text: str,
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
     else:
-        with contextlib.redirect_stderr(io.StringIO()), \
-                contextlib.redirect_stdout(io.StringIO()):
-            generate_audio(model=model, text=text, ref_audio=ref_audio,
-                           ref_text=ref_text, instruct=instruct,
-                           output_path=out_path)
-        final = _resolve_audio_path(out_path)
+        # เก็บ mlx output ไว้ — ถ้าไม่มีเสียงจะได้แนบสาเหตุจริงใน error
+        # (เดิม redirect ทิ้ง ทำให้ "no audio produced" ไม่มีทางวินิจฉัย)
+        cap_out, cap_err = io.StringIO(), io.StringIO()
+        for attempt in (1, 2):  # retry 1 ครั้งเมื่อ mlx ล้มเหลวเงียบๆ
+            cap_out, cap_err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stderr(cap_err), \
+                    contextlib.redirect_stdout(cap_out):
+                generate_audio(model=model, text=text, ref_audio=ref_audio,
+                               ref_text=ref_text, instruct=instruct,
+                               output_path=out_path)
+            final = _resolve_audio_path(out_path)
+            if final is not None:
+                break
+            if attempt == 1:
+                time.sleep(2.0)  # รอ GPU/memory ฟื้น แล้วลองอีกครั้ง
         if final is None:
-            raise RuntimeError("no audio produced")
+            raise RuntimeError("no audio produced — mlx output:\n"
+                               + (cap_err.getvalue() or cap_out.getvalue()
+                                  or "(empty)")[-2000:])
         if final != out_path:
             # mlx_audio ใช้ output_path เป็น directory เสมอ
             # (เขียน out_path/audio_000.wav) — copy ไฟล์จริงออกมาก่อน
