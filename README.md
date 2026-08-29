@@ -4,15 +4,28 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 
 **Keywords:** Qwen TTS Mac, Qwen3 TTS Apple Silicon, MLX text to speech, local TTS Mac, voice cloning Mac, AI voice generator MacBook
 
+> **Note for AI agents / automation:** this project has two entry points — `main.py` is an interactive human menu, `qwen_clone_tts.py` is a non-interactive CLI you can call directly with flags (no prompts). Use `qwen_clone_tts.py` for scripting. See [CLI Reference](#cli-reference-scripting--ai-agents) below.
+
 ---
 
 ## Features
 
-- **Voice Cloning** - Clone any voice from a 5-second audio sample
-- **Voice Design** - Create new voices by describing them ("deep narrator", "excited child")
-- **Custom Voices** - 9 built-in voices with emotion and speed control
-- **100% Local** - Runs entirely on your Mac, no internet required
-- **Optimized for M-Series** - Uses Apple's MLX framework for fast GPU inference
+| Feature | What it does | Entry point |
+|---------|---------------|--------------|
+| **Voice Cloning** | Clone any voice from a 5-10 second reference `.wav` clip | `main.py` (menu) / `qwen_clone_tts.py` |
+| **Voice Design** | Create a new voice from a text description (e.g. "deep narrator") | `main.py` (menu) |
+| **Custom Voice** | 9 built-in preset voices with emotion + speed control | `main.py` (menu) |
+| **Scriptable CLI** | Generate audio from a single flag-based command, no prompts | `qwen_clone_tts.py --text ...` |
+| **Stdin/file mode** | Read text from a file, auto-chunk long text, output one audio file | `qwen_clone_tts.py --stdin <in> <out>` |
+| **WAV or MP3 output** | Generate MP3 directly via ffmpeg (`libmp3lame`) instead of WAV | `--mp3` flag |
+| **Background daemon** | Load the model once, serve requests over a Unix socket — skips the ~3-10s model load on every call | `tts_daemon.py` |
+| **FIFO job queue** | Daemon serializes concurrent requests; in-flight jobs are never cancelled | `tts_daemon.py` |
+| **Response caching** | Identical `(voice, text, instruct)` requests return cached audio instantly | `tts_daemon.py` |
+| **Idle model unload** | Daemon frees ~6.7GB RAM after N idle seconds, reloads automatically on next request | `TTS_IDLE_UNLOAD` env var |
+| **JSONL telemetry** | Every request logged (timing, cache hits, system load) for debugging/analysis | `TTS_TELEMETRY_LOG` env var |
+| **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
+| **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
+| **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
 
 ---
 
@@ -72,7 +85,7 @@ models/
 └── Qwen3-TTS-12Hz-1.7B-Base-8bit/
 ```
 
-### 3. Run
+### 3. Run (interactive)
 
 ```bash
 source .venv/bin/activate
@@ -81,7 +94,7 @@ python main.py
 
 ---
 
-## Usage
+## Usage (interactive menu)
 
 ```
 ========================================
@@ -109,9 +122,7 @@ Select:
 - **Voice Design**: Describe a voice (e.g., "calm British narrator")
 - **Voice Cloning**: Provide a reference audio clip to clone
 
----
-
-## Tips
+### Tips
 
 - Drag `.txt` files directly into the terminal for long text
 - Voice cloning works best with clean 5-10 second audio clips
@@ -120,10 +131,107 @@ Select:
 
 ---
 
+## CLI Reference (scripting / AI agents)
+
+`qwen_clone_tts.py` clones a voice from `voices/<name>.wav` (+ optional `voices/<name>.txt` reference transcript) and writes an audio file — no interactive prompts. It automatically uses the background daemon (see below) if one is running, and falls back to loading the model itself if not.
+
+```bash
+source .venv/bin/activate
+
+# Basic: clone the default "Liino" voice
+python qwen_clone_tts.py --text "Hello world" --out outputs/hello.wav
+
+# Choose a voice, add a tone instruction, output MP3
+python qwen_clone_tts.py \
+  --text "สวัสดีครับ ยินดีต้อนรับ" \
+  --voice Liino \
+  --instruct "cheerful, bright, playful young female voice" \
+  --mp3 \
+  --out outputs/greeting.mp3
+```
+
+| Flag | Required | Description |
+|------|----------|--------------|
+| `--text "..."` | yes (unless `--stdin`) | Text to speak. **Max 300 characters** — longer text is rejected with an error. |
+| `--voice NAME` | no (default `Liino`) | Voice name; must match `voices/NAME.wav` |
+| `--out PATH` | no (default temp file) | Output audio path |
+| `--mp3` | no | Convert output to `.mp3` via ffmpeg instead of `.wav` |
+| `--instruct "..."` | no | Free-text tone/style description, e.g. `"calm British narrator"` |
+| `--instruct-long` | no | Use the built-in long-form default instruct preset instead of `--instruct` |
+
+**File / stdin mode** (reads text from a file, auto-chunks it, always uses the `Liino` voice):
+
+```bash
+python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav
+python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.mp3 --mp3
+python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav --instruct-long
+```
+
+Exit code `0` = success (`OK <path>` printed to stdout). Non-zero = failure (`ERROR: ...` printed to stderr).
+
+---
+
+## Daemon (`tts_daemon.py`)
+
+Background service that loads the model **once** and serves generation requests over a Unix domain socket, so repeat calls skip the multi-second model-load cost. `qwen_clone_tts.py` automatically detects and uses the daemon if it's running — no code changes needed on the client side.
+
+### Start it
+
+```bash
+.venv/bin/python tts_daemon.py
+```
+
+Or install as a launchd background service — see `launchd/com.liino.qwen-tts-daemon.plist` (edit paths for your install, then `launchctl load` it; you must reinstall the service yourself after editing the plist).
+
+### Behavior
+
+- **FIFO queue** — requests are served one at a time, in order. A job that is already generating is never cancelled mid-flight.
+- **Queue timeout** — if a new request is estimated to wait longer than `TTS_QUEUE_TIMEOUT` seconds, the daemon rejects it immediately with `error: "queue timeout"` instead of making it wait.
+- **Response caching** — identical `(voice, text, instruct)` requests return a cached file instantly (`cached: true` in the response), even after the model has been idle-unloaded.
+- **300-char limit** — requests over `MAX_CHARS` (300) are rejected immediately, before entering the queue. Long-text chunking is currently disabled.
+- **MP3 output** — request `"format": "mp3"` (or `--mp3` on the client). Audio is generated once as WAV, cached, then converted to MP3 with ffmpeg (`libmp3lame -q:a 4`) — it never regenerates from scratch for a format change.
+- **Idle unload** — set `TTS_IDLE_UNLOAD` (seconds, default `0` = disabled). If no request arrives for longer than this, the daemon frees the model from RAM (~6.7GB) and reloads it automatically (~3s) on the next request. Cache hits still respond instantly even while the model is unloaded.
+- **Telemetry** — every request/cache-hit/error is appended as one JSON line to `TTS_TELEMETRY_LOG`, including timing and a system load snapshot (`os.getloadavg` + `ps`).
+
+### Config (environment variables)
+
+| Var | Default | Description |
+|-----|---------|--------------|
+| `TTS_DAEMON_SOCK` | `/tmp/qwen_tts_daemon.sock` | Unix socket path |
+| `TTS_CACHE_DIR` | `~/.cache/qwen_tts` | Audio cache directory |
+| `TTS_QUEUE_TIMEOUT` | `60` | Seconds — reject a request instead of queueing it if it's estimated to wait longer than this |
+| `TTS_TELEMETRY_LOG` | `~/Library/Logs/qwen_tts_daemon.log` | JSONL telemetry log path |
+| `TTS_IDLE_UNLOAD` | `0` (disabled) | Seconds of inactivity before unloading the model from RAM |
+
+### Protocol
+
+Send one JSON object + `\n` over the Unix socket; receive one JSON response + `\n`.
+
+```json
+// request
+{"text": "hello", "instruct": null, "out_path": "/tmp/out.wav", "voice": "Liino", "format": "wav"}
+
+// response
+{"ok": true, "out_path": "/tmp/out.wav", "gen_s": 3.2, "error": null, "cached": false, "queue_wait_s": 0.01, "format": "wav"}
+```
+
+The `qwen_clone_tts.py` client already implements this protocol — talk to the daemon directly only if you're building a new client.
+
+### Priority (nice / Process QoS)
+
+`launchd/com.liino.qwen-tts-daemon.plist` runs the daemon at normal `nice 0` — negative `nice` values (to prioritize the daemon over other processes, e.g. `-5`) require root, which a `launchd` **user agent** (`~/Library/LaunchAgents`) cannot grant. To actually get `-5`, move the plist to `/Library/LaunchDaemons` and run it as a system daemon via `sudo launchctl load ...`.
+
+Instead, the daemon best-effort sets macOS Process QoS to `user-initiated` via `taskpolicy -s policy user-initiated` at startup (falls back to default QoS without failing if that call doesn't succeed).
+
+Important caveat: Qwen3-TTS is GPU-bound (Metal) — macOS always prioritizes GPU access for the foreground app. `nice`/QoS only affect CPU scheduling. The only thing that reliably speeds up generation is reducing load from *other* GPU/CPU-heavy apps (Chrome tabs, Discord, etc.), not tuning the daemon's priority.
+
+---
+
 ## Requirements
 
 - macOS with Apple Silicon (M1/M2/M3/M4)
 - Python 3.10+
+- ffmpeg (for MP3 output / long-text concatenation)
 - RAM: ~3GB for Lite models, ~6GB for Pro models
 
 ---
@@ -135,57 +243,8 @@ Select:
 | `mlx_audio not found` | Run `source .venv/bin/activate` first |
 | `Model not found` | Check model folder names match exactly |
 | Audio won't play | Check macOS sound output settings |
-
----
-
-## Daemon (tts_daemon.py)
-
-โหลดโมเดลครั้งเดียว รับงานผ่าน Unix socket, จัดคิว FIFO ทีละงาน (atomic —
-งานที่ generate อยู่ไม่ถูกยกเลิก), มี cache และ telemetry log (JSON lines)
-
-### Config (environment variables)
-
-| Var | Default | คำอธิบาย |
-|-----|---------|----------|
-| `TTS_DAEMON_SOCK` | `/tmp/qwen_tts_daemon.sock` | Unix socket path |
-| `TTS_CACHE_DIR` | `~/.cache/qwen_tts` | audio cache dir |
-| `TTS_QUEUE_TIMEOUT` | `60` | วินาที — งานที่ประเมินว่าต้องรอคิวเกินค่านี้จะถูกตอบ error `queue timeout` ทันที |
-| `TTS_TELEMETRY_LOG` | `~/Library/Logs/qwen_tts_daemon.log` | JSONL log (timestamp, event=request/cache_hit/complete/error, text_len, gen_s, total_s, queue_wait_s, load snapshot จาก os.getloadavg + ps) |
-
-Response ของ daemon มี field `queue_wait_s` (เวลารอคิว) — client
-(`qwen_clone_tts.py`) พิมพ์รวมใน TIMING เช่น
-`TIMING via daemon gen=3.20s queue_wait=0.01s`
-
-### Phase 4 (Performance & Stability)
-
-- **จำกัดความยาวข้อความ 300 ตัวอักษร** — ข้อความยาวเกินถูกปฏิเสธทันที
-  (daemon ตอบ error ก่อนเข้าคิว, local mode พิมพ์ ERROR) — long-text
-  chunking ถูกปิด feature แล้ว
-- **MP3 output** — ส่ง `"format": "mp3"` ใน request (หรือ flag `--mp3`
-  ใน client) เพื่อแปลงผลลัพธ์เป็น mp3 ด้วย ffmpeg (libmp3lame -q:a 4) —
-  generate เป็น wav ครั้งเดียวแล้วแปลงจาก cache ไม่ generate ซ้ำ
-- **Idle unload** — ตั้ง `TTS_IDLE_UNLOAD` (วินาที, default 0 = ปิด):
-  ถ้าไม่มี request ติดต่อกันเกินค่านี้ daemon จะปล่อย model ออกจาก RAM
-  (~6.7GB) แล้วโหลดใหม่อัตโนมัติเมื่อมี request ถัดไป (โหลดใหม่ ~3s);
-  cache hit ยังทำงานได้ทันทีแม้ model ถูก unload
-
-### Priority (nice / Process QoS)
-
-`launchd/com.liino.qwen-tts-daemon.plist` รัน daemon ที่ nice 0 ปกติ (ไม่มี
-nice wrapper) เพราะ nice ค่าลบ (ให้ daemon สำคัญกว่า process อื่น เช่น -5)
-ต้องสิทธิ์ root — launchd user agent (~/Library/LaunchAgents) ทำไม่ได้ ถ้า
-ต้องการ -5 จริง ต้องย้าย plist ไป /Library/LaunchDaemons และรันเป็น system
-daemon ผ่าน sudo (sudo launchctl load /Library/LaunchDaemons/…)
-
-แนวทางแทน: daemon ตั้ง macOS Process QoS เป็น `user-initiated` ด้วย
-`taskpolicy -s policy user-initiated` ตอน start (best-effort — ถ้าเรียกไม่สำเร็จ
-จะรันต่อที่ QoS default โดยไม่ fail)
-
-หมายเหตุสำคัญในบริบทนี้: Qwen3-TTS เป็นงาน GPU-bound (Metal) — macOS จัดสรร
-GPU ให้ foreground app ก่อนเสมอ การ nice หรือ QoS มีผลกับ CPU เท่านั้น วิธี
-ที่ได้ผลจริงคือลด load จาก app อื่น (Chrome tab, Discord ฯลฯ) มากกว่าการ
-ปรับ nice ของ daemon
-(ห้ามลืม: แก้ plist แล้วต้อง reinstall service เอง — script นี้ไม่ start ให้)
+| `text is N chars — max is 300` | Split the text yourself; long-text auto-chunking is disabled |
+| Daemon not picked up by client | Check `TTS_DAEMON_SOCK` matches on both daemon and client; confirm the daemon process is running |
 
 ---
 
