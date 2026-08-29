@@ -14,11 +14,9 @@ kanban-plugin: board
 
 ## REVIEW
 
-- [TTS-1002](tasks/TTS-1002.md): ?say รับข้อความหลายบรรทัด (array) + auto mood จาก emoji
-
-
 ## DONE
 
+- [TTS-1002](tasks/TTS-1002.md): ?say รับข้อความหลายบรรทัด (array) + auto mood จาก emoji
 - [TTS-1001](tasks/TTS-1001.md): Prefix command ?say ให้บอทพูดใน voice channel ด้วยเสียง Liino
 ## CLOSED
 
