@@ -19,6 +19,11 @@ outputs/*
 __pycache__/
 *.pyc
 *.pyo
+.env
 
 # Serena
 .serena
+
+# Kanban
+.kanban.json
+obsidian/kanban/tasks/lark-sync.json
