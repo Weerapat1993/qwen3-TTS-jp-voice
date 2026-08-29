@@ -39,6 +39,50 @@ DEFAULT_INSTRUCT_LONG = (
     "exaggerated.")
 
 
+MOOD_PRESETS: dict[str, str] = {
+    # ชื่อ mood -> instruct ที่ส่งให้โมเดล (ภาษาอังกฤษเพื่อความแม่นของโมเดล)
+    "default":   DEFAULT_INSTRUCT,
+    "long":      DEFAULT_INSTRUCT_LONG,
+    "excited":   "Very excited and enthusiastic young female voice, "
+                 "fast-paced and energetic, sparkling with joy.",
+    "sleepy":    "Soft, drowsy, relaxed young female voice. Slow pace, "
+                 "gentle and low energy, like talking just before falling asleep.",
+    "surprised": "Surprised young female voice with a gasp of amazement, "
+                 "wide-eyed and astonished, briefly raised pitch.",
+    "sad":       "Sad, melancholic young female voice. Slow, quiet and "
+                 "emotional, with a hint of sniffle, not overly dramatic.",
+    "angry":     "Angry, pouty young female voice. Sharp and huffy like "
+                 "playful irritation, not genuinely hostile.",
+    "whisper":   "Soft whispering young female voice. Very quiet, intimate "
+                 "and close to the microphone, sharing a secret.",
+    "gentle":    "Warm, gentle, soothing young female voice. Kind and calm, "
+                 "comforting, moderate slow pace.",
+    "giggle":    "Playful young female voice mid-giggle, light and bouncy, "
+                 "cheerful with a little laugh in the tone.",
+    "bored":     "Bored, unenthusiastic young female voice. Flat and droning, "
+                 "dragging slightly, with a sigh in the middle, low energy.",
+    "storyteller": "Warm expressive storyteller voice, like narrating a "
+                   "bedtime story. Rich intonation, gentle suspense, "
+                   "slowing down at key moments, inviting the listener in.",
+}
+
+
+def resolve_instruct(mood: str | None, instruct: str | None,
+                     instruct_long: bool) -> str | None:
+    """เลือก instruct: --mood มีลำดับความสำคัญก่อน --instruct / --instruct-long"""
+    if instruct_long:
+        return DEFAULT_INSTRUCT_LONG
+    if mood:
+        m = mood.strip().lower()
+        if m not in MOOD_PRESETS:
+            raise ValueError(
+                f"unknown mood '{m}' — choices: {', '.join(sorted(MOOD_PRESETS))}")
+        return MOOD_PRESETS[m]
+    if instruct:
+        return instruct
+    return MOOD_PRESETS["default"]
+
+
 # ตัวอักษรที่จบประโยค/ช่องว่างธรรมชาติ (ไทย, อังกฤษ, เลข, วรรคตอน)
 _SENT_END = "…!?.;:\n\r"
 _SENT_END_RE = re.compile(rf"[{re.escape(_SENT_END)}](?=[\s\u0e01-\u0e4eA-Za-z0-9\"'“”‘’«»-]|$)")
@@ -269,7 +313,17 @@ def main() -> int:
         if not text:
             print("ERROR: empty input", file=sys.stderr)
             return 1
-        instruct = DEFAULT_INSTRUCT_LONG if instruct_long else DEFAULT_INSTRUCT
+        mood = None
+        if "--mood" in rest:
+            i = rest.index("--mood")
+            mood = rest[i + 1] if i + 1 < len(rest) else None
+            rest = rest[:i] + rest[i + 2:]
+        try:
+            instruct = resolve_instruct(mood, None,
+                                        "--instruct-long" in rest)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
         return _run("Liino", text, out_path, instruct,
                     mp3="--mp3" in rest)
 
@@ -283,13 +337,18 @@ def main() -> int:
                     help="คำบรรยายน้ำเสียง เช่น 'cheerful idol voice'")
     ap.add_argument("--instruct-long", action="store_true",
                     help="ใช้ instruct ยาวสไตล์เดิม (full_default)")
+    ap.add_argument("--mood", default=None,
+                    choices=sorted(MOOD_PRESETS),
+                    help="น้ำเสียงสำเร็จรูป เช่น excited, sleepy, whisper")
     args = ap.parse_args()
     out_path = args.out or os.path.join(
         tempfile.gettempdir(), "qwen_clone_out.wav")
-    if args.instruct_long:
-        instruct = DEFAULT_INSTRUCT_LONG
-    else:
-        instruct = args.instruct
+    try:
+        instruct = resolve_instruct(args.mood, args.instruct,
+                                    args.instruct_long)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
     return _run(args.voice, args.text, out_path, instruct, mp3=args.mp3)
 
 
