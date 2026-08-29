@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Discord say bot — prefix command `?say <ข้อความ> [--mood <preset>]`
+
+ให้บอทเข้า voice channel ที่ผู้สั่งอยู่ สร้างเสียงด้วย qwen3-tts (เสียงโคลน Liino)
+ผ่าน tts_daemon fast path เท่านั้น (ไม่ fallback โหลดโมเดลเองถ้า daemon ล่ม —
+ดู Decision ใน obsidian/kanban/tasks/TTS-1001.md) แล้วเล่นในห้องตามคิวต่อ guild
+
+Usage:
+    .venv/bin/python discord_say_bot.py
+
+ต้อง export DISCORD_BOT_TOKEN เป็น process env var ก่อนรัน (โปรเจกต์นี้ไม่มีการโหลด
+.env อัตโนมัติ — ไฟล์ .env ที่มีอยู่ใน repo root ใช้สำหรับ NOTION_API_TOKEN ของ
+kanban tooling เท่านั้น ไม่เกี่ยวกับ script นี้) และต้องเปิด privileged
+"Message Content Intent" ใน Discord Developer Portal ของบอทนี้ (นอกเหนือจากโค้ด)
+ไม่งั้นบอทจะอ่านข้อความ prefix command ไม่ได้ (ดูเหมือน "ไม่ตอบสนอง" เฉยๆ)
+
+Env vars:
+    DISCORD_BOT_TOKEN      (required, secret) Discord bot token — ห้าม hardcode
+    DISCORD_COMMAND_PREFIX (default "?") prefix ของ text command
+    VC_IDLE_TIMEOUT_S      (default 60) วินาทีที่รอก่อนออกจาก VC หลังคิวเล่นเสียงว่าง
+"""
+import asyncio
+import os
+import sys
+import tempfile
+import time
+
+import discord
+from discord.ext import commands
+
+PROJ = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJ)
+
+# reuse ของเดิมจาก qwen_clone_tts.py ทั้งหมด — ห้าม duplicate ค่า/logic
+from qwen_clone_tts import MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
+
+DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+COMMAND_PREFIX = os.environ.get("DISCORD_COMMAND_PREFIX", "?")
+VC_IDLE_TIMEOUT_S = float(os.environ.get("VC_IDLE_TIMEOUT_S", "60"))
+
+DEFAULT_VOICE = "Liino"
+
+intents = discord.Intents.default()
+intents.message_content = True  # ต้องเปิด privileged intent ใน Developer Portal ด้วย
+
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents,
+                    help_command=None)
+
+
+class GuildPlayback:
+    """คิวเล่นเสียงใน VC ต่อ guild (แยกจากคิว generate ของ tts_daemon)
+
+    worker task เล่นทีละไฟล์ผ่าน discord.FFmpegPCMAudio แล้วรอ `after` callback
+    ก่อนเล่นตัวถัดไป — กันไม่ให้คำสั่งซ้อนกันเล่นทับกัน (AC: เล่นเรียงคิว)
+    หลังคิวว่างและเล่นจบ เริ่ม countdown VC_IDLE_TIMEOUT_S แล้วค่อยออกจากห้อง
+    ถ้ามีงานใหม่เข้าคิวก่อนครบเวลาจะ cancel countdown อัตโนมัติ
+    """
+
+    def __init__(self, guild: discord.Guild):
+        self.guild = guild
+        self.queue: "asyncio.Queue[tuple[discord.VoiceChannel, discord.abc.Messageable, str]]" = asyncio.Queue()
+        self.worker_task: asyncio.Task | None = None
+        self.idle_task: asyncio.Task | None = None
+
+    def ensure_worker(self) -> None:
+        if self.worker_task is None or self.worker_task.done():
+            self.worker_task = asyncio.create_task(self._worker())
+
+    def _cancel_idle(self) -> None:
+        if self.idle_task is not None and not self.idle_task.done():
+            self.idle_task.cancel()
+        self.idle_task = None
+
+    def _schedule_idle_leave(self, voice_client: discord.VoiceClient) -> None:
+        self._cancel_idle()
+        self.idle_task = asyncio.create_task(self._idle_leave(voice_client))
+
+    async def _idle_leave(self, voice_client: discord.VoiceClient) -> None:
+        try:
+            await asyncio.sleep(VC_IDLE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            return
+        if voice_client.is_connected() and not voice_client.is_playing() \
+                and self.queue.empty():
+            await voice_client.disconnect()
+
+    async def _worker(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            voice_channel, reply_to, wav_path = await self.queue.get()
+            self._cancel_idle()
+            try:
+                voice_client = self.guild.voice_client
+                if voice_client is None:
+                    voice_client = await voice_channel.connect()
+                elif voice_client.channel.id != voice_channel.id:
+                    await voice_client.move_to(voice_channel)
+
+                done = asyncio.Event()
+
+                def _after(error: Exception | None) -> None:
+                    if error is not None:
+                        print(f"discord_say_bot: playback error: {error}",
+                              file=sys.stderr, flush=True)
+                    loop.call_soon_threadsafe(done.set)
+
+                source = discord.FFmpegPCMAudio(wav_path)
+                voice_client.play(source, after=_after)
+                await done.wait()
+            except Exception as e:  # noqa: BLE001
+                print(f"discord_say_bot: worker error: {e}", file=sys.stderr,
+                      flush=True)
+                try:
+                    await reply_to.send(f"⚠️ เล่นเสียงไม่สำเร็จ: {e}")
+                except discord.DiscordException:
+                    pass
+            finally:
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
+                self.queue.task_done()
+                voice_client = self.guild.voice_client
+                if self.queue.empty() and voice_client is not None:
+                    self._schedule_idle_leave(voice_client)
+
+
+_playback: dict[int, GuildPlayback] = {}
+
+
+def _get_playback(guild: discord.Guild) -> GuildPlayback:
+    pb = _playback.get(guild.id)
+    if pb is None:
+        pb = GuildPlayback(guild)
+        _playback[guild.id] = pb
+    return pb
+
+
+def _parse_say_args(raw: str) -> tuple[str, str | None]:
+    """แยก `--mood <preset>` ออกจาก raw text เหลือแค่ text ที่จะพูด
+
+    prefix command ธรรมดาไม่มี option parser ของ slash command จึงต้อง parse เอง
+    """
+    parts = raw.split()
+    mood = None
+    if "--mood" in parts:
+        i = parts.index("--mood")
+        if i + 1 < len(parts):
+            mood = parts[i + 1]
+            parts = parts[:i] + parts[i + 2:]
+        else:
+            parts = parts[:i]
+    text = " ".join(parts).strip()
+    return text, mood
+
+
+@bot.event
+async def on_ready() -> None:
+    print(f"discord_say_bot: logged in as {bot.user} "
+          f"(prefix={COMMAND_PREFIX!r}, idle_timeout={VC_IDLE_TIMEOUT_S:.0f}s)",
+          file=sys.stderr, flush=True)
+
+
+@bot.command(name="say")
+@commands.guild_only()
+async def say(ctx: commands.Context, *, text: str = "") -> None:
+    text, mood = _parse_say_args(text)
+    if not text:
+        await ctx.reply(f"ใช้: `{COMMAND_PREFIX}say <ข้อความ> [--mood <preset>]` "
+                         f"(mood: {', '.join(sorted(MOOD_PRESETS))})")
+        return
+    if len(text) > MAX_CHARS:
+        await ctx.reply(f"⚠️ ข้อความยาวเกินไป ({len(text)} ตัวอักษร) — "
+                         f"จำกัดไม่เกิน {MAX_CHARS} ตัวอักษร")
+        return
+    try:
+        instruct = resolve_instruct(mood, None, False)
+    except ValueError as e:
+        await ctx.reply(f"⚠️ {e}")
+        return
+
+    author_voice = getattr(ctx.author, "voice", None)
+    if author_voice is None or author_voice.channel is None:
+        await ctx.reply("ต้องเข้า voice channel ก่อนถึงจะใช้คำสั่งนี้ได้")
+        return
+    voice_channel = author_voice.channel
+
+    # สร้างชื่อไฟล์ unique โดยไม่สร้างไฟล์ว่างล่วงหน้า — mlx_audio จะไม่เขียน
+    # ทับไฟล์ที่มีอยู่แล้ว (ทำให้ได้ไฟล์ 0 bytes เมื่อใช้ mkstemp)
+    wav_path = os.path.join(
+        tempfile.gettempdir(), f"qwen_say_{os.getpid()}_{int(time.time()*1000)}.wav")
+
+    t0 = time.time()
+    # TTS ผ่าน daemon fast path เท่านั้น — รันใน thread เสมอ ห้ามบล็อก event loop
+    ok = await asyncio.to_thread(
+        _try_daemon, text, wav_path, instruct, DEFAULT_VOICE, "wav")
+    if not ok:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+        # Decision (ดู TTS-1001 plan): daemon ล่ม/ตอบ error -> แจ้งทันที
+        # ไม่ fallback ไปโหลดโมเดลเองในบอท (ต่างจาก qwen_clone_tts.py CLI ปกติ)
+        await ctx.reply("⚠️ TTS daemon ไม่พร้อมใช้งาน (ล่ม/ยังไม่ได้รัน หรือสร้าง"
+                         "เสียงไม่สำเร็จ) — ตรวจ log ของบอทและลองสตาร์ท "
+                         "`tts_daemon.py` แล้วลองใหม่")
+        return
+    gen_s = time.time() - t0
+
+    playback = _get_playback(ctx.guild)
+    playback.ensure_worker()
+    await playback.queue.put((voice_channel, ctx.channel, wav_path))
+    print(f"discord_say_bot: queued say guild={ctx.guild.id} "
+          f"gen_s={gen_s:.2f} mood={mood} chars={len(text)}",
+          file=sys.stderr, flush=True)
+
+
+def main() -> int:
+    if not DISCORD_BOT_TOKEN:
+        print("ERROR: DISCORD_BOT_TOKEN is not set — export it as an "
+              "environment variable before running (no .env auto-load in "
+              "this project)", file=sys.stderr)
+        return 1
+    bot.run(DISCORD_BOT_TOKEN)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

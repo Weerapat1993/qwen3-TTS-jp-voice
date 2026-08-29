@@ -4,7 +4,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 
 **Keywords:** Qwen TTS Mac, Qwen3 TTS Apple Silicon, MLX text to speech, local TTS Mac, voice cloning Mac, AI voice generator MacBook
 
-> **Note for AI agents / automation:** this project has two entry points — `main.py` is an interactive human menu, `qwen_clone_tts.py` is a non-interactive CLI you can call directly with flags (no prompts). Use `qwen_clone_tts.py` for scripting. See [CLI Reference](#cli-reference-scripting--ai-agents) below.
+> **Note for AI agents / automation:** this project has two entry points — `main.py` is an interactive human menu, `qwen_clone_tts.py` is a non-interactive CLI you can call directly with flags (no prompts). Use `qwen_clone_tts.py` for scripting. See [CLI Reference](#cli-reference-scripting--ai-agents) below. There is also an optional Discord bot (`discord_say_bot.py`) — see [Discord Bot](#discord-bot-discord_say_botpy) below.
 
 ---
 
@@ -26,6 +26,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
 | **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
 | **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
+| **Discord voice bot** | Prefix command `?say <text> [--mood ...]` makes the bot join your voice channel and speak with the Liino voice, via the daemon fast path | `discord_say_bot.py` |
 
 ---
 
@@ -224,6 +225,50 @@ The `qwen_clone_tts.py` client already implements this protocol — talk to the 
 Instead, the daemon best-effort sets macOS Process QoS to `user-initiated` via `taskpolicy -s policy user-initiated` at startup (falls back to default QoS without failing if that call doesn't succeed).
 
 Important caveat: Qwen3-TTS is GPU-bound (Metal) — macOS always prioritizes GPU access for the foreground app. `nice`/QoS only affect CPU scheduling. The only thing that reliably speeds up generation is reducing load from *other* GPU/CPU-heavy apps (Chrome tabs, Discord, etc.), not tuning the daemon's priority.
+
+---
+
+## Discord Bot (`discord_say_bot.py`)
+
+Optional Discord bot that adds a prefix command `?say <text> [--mood <preset>]`: the bot joins the voice channel you're currently in, generates speech with the cloned "Liino" voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic.
+
+This is a **text command**, not a Discord slash command, deliberately — to avoid clashing with other bots' slash command namespaces.
+
+### Prerequisites (outside the code)
+
+- The background daemon must be running (`tts_daemon.py`) — the bot **never** falls back to loading the model itself; if the daemon is down or fails, it replies with a clear error instead of hanging.
+- In the [Discord Developer Portal](https://discord.com/developers/applications), enable the privileged **Message Content Intent** for this bot application — without it, the bot cannot read the text of `?say` commands and will appear to simply not respond.
+- The bot needs `Connect` and `Speak` permissions in the target voice channel.
+- `DISCORD_BOT_TOKEN` must be exported as a real process environment variable — this project does **not** auto-load a `.env` file (config is env-var-only, no config file, same as `tts_daemon.py`). The `.env` at the repo root is unrelated tooling config (Notion token for the kanban skill), not read by any TTS script.
+
+### Start it
+
+```bash
+# make sure the daemon is running first
+.venv/bin/python tts_daemon.py &
+
+# then start the bot (DISCORD_BOT_TOKEN must already be exported in this shell)
+export DISCORD_BOT_TOKEN=...
+.venv/bin/python discord_say_bot.py
+```
+
+### Behavior
+
+- **`?say <text>`** — joins the voice channel of the message author and speaks `<text>` with the Liino voice.
+- **`?say <text> --mood <preset>`** — same, but applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, etc.).
+- Text over `MAX_CHARS` (300) is rejected immediately with a readable error — it is never queued.
+- If you're not in a voice channel when you run `?say`, the bot replies with an error and does not join anything.
+- **Playback queue per guild** — TTS generation always runs in a background thread (`asyncio.to_thread`) so it never blocks the bot's Discord heartbeat. Once audio is generated it's placed on a per-guild `asyncio.Queue`; a worker plays files one at a time via `discord.FFmpegPCMAudio`, waiting for each one to finish before starting the next — concurrent `?say` calls queue up instead of overlapping.
+- **Idle-leave** — after the queue is empty and playback finishes, the bot waits `VC_IDLE_TIMEOUT_S` seconds (default 60) and then disconnects from the voice channel automatically. A new `?say` before that timer elapses cancels the countdown.
+- **Daemon down = immediate error** — if the daemon socket isn't there or the daemon returns an error, the bot posts an error message right away and does **not** fall back to loading the model in-process (unlike `qwen_clone_tts.py`'s normal CLI behavior). This is intentional: loading the ~6.7GB model in the bot process would make the bot appear to hang for several seconds on every request.
+
+### Config (environment variables)
+
+| Var | Default | Description |
+|-----|---------|--------------|
+| `DISCORD_BOT_TOKEN` | *(required, secret)* | Discord bot token — export as a process env var, never hardcode or commit it (not auto-loaded from `.env`) |
+| `DISCORD_COMMAND_PREFIX` | `?` | Prefix for the bot's text commands |
+| `VC_IDLE_TIMEOUT_S` | `60` | Seconds to wait in an idle voice channel (empty queue, nothing playing) before disconnecting |
 
 ---
 
