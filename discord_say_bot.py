@@ -18,9 +18,11 @@ Env vars:
     DISCORD_BOT_TOKEN      (required, secret) Discord bot token — ห้าม hardcode
     DISCORD_COMMAND_PREFIX (default "?") prefix ของ text command
     VC_IDLE_TIMEOUT_S      (default 60) วินาทีที่รอก่อนออกจาก VC หลังคิวเล่นเสียงว่าง
+    SAY_SENTENCE_GAP_S    (default 0.5) วินาทีที่เว้นเงียบหลังจบแต่ละประโยคก่อนเล่นบรรทัดถัดไป (0 = ปิด)
 """
 import asyncio
 import os
+import re
 import sys
 import tempfile
 import time
@@ -33,10 +35,12 @@ sys.path.insert(0, PROJ)
 
 # reuse ของเดิมจาก qwen_clone_tts.py ทั้งหมด — ห้าม duplicate ค่า/logic
 from qwen_clone_tts import MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
+from say_moods import extract_mood, parse_lines  # noqa: E402
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 COMMAND_PREFIX = os.environ.get("DISCORD_COMMAND_PREFIX", "?")
 VC_IDLE_TIMEOUT_S = float(os.environ.get("VC_IDLE_TIMEOUT_S", "60"))
+SAY_SENTENCE_GAP_S = float(os.environ.get("SAY_SENTENCE_GAP_S", "0.5"))
 
 DEFAULT_VOICE = "Liino"
 
@@ -107,6 +111,9 @@ class GuildPlayback:
                 source = discord.FFmpegPCMAudio(wav_path)
                 voice_client.play(source, after=_after)
                 await done.wait()
+                # เว้นเงียบสั้น ๆ หลังจบประโยค ก่อนเล่นบรรทัดถัดไป (TTS-1002)
+                if SAY_SENTENCE_GAP_S > 0:
+                    await asyncio.sleep(SAY_SENTENCE_GAP_S)
             except Exception as e:  # noqa: BLE001
                 print(f"discord_say_bot: worker error: {e}", file=sys.stderr,
                       flush=True)
@@ -136,22 +143,21 @@ def _get_playback(guild: discord.Guild) -> GuildPlayback:
     return pb
 
 
+_MOOD_ARG_RE = re.compile(r"(?:^|\s)--mood\s+(\S+)")
+
+
 def _parse_say_args(raw: str) -> tuple[str, str | None]:
-    """แยก `--mood <preset>` ออกจาก raw text เหลือแค่ text ที่จะพูด
+    """แยก `--mood <preset>` ออกจาก raw เหลือแค่ข้อความที่จะพูด
 
     prefix command ธรรมดาไม่มี option parser ของ slash command จึงต้อง parse เอง
+    ใช้ regex (ไม่ใช่ .split()) เพื่อคง newline ในข้อความหลายบรรทัดไว้ (TTS-1002)
     """
-    parts = raw.split()
-    mood = None
-    if "--mood" in parts:
-        i = parts.index("--mood")
-        if i + 1 < len(parts):
-            mood = parts[i + 1]
-            parts = parts[:i] + parts[i + 2:]
-        else:
-            parts = parts[:i]
-    text = " ".join(parts).strip()
-    return text, mood
+    mood: str | None = None
+    m = _MOOD_ARG_RE.search(raw)
+    if m:
+        mood = m.group(1)
+        raw = raw[:m.start()] + raw[m.end():]
+    return raw.strip(), mood
 
 
 @bot.event
@@ -164,20 +170,40 @@ async def on_ready() -> None:
 @bot.command(name="say")
 @commands.guild_only()
 async def say(ctx: commands.Context, *, text: str = "") -> None:
-    text, mood = _parse_say_args(text)
-    if not text:
-        await ctx.reply(f"ใช้: `{COMMAND_PREFIX}say <ข้อความ> [--mood <preset>]` "
-                         f"(mood: {', '.join(sorted(MOOD_PRESETS))})")
+    raw, explicit_mood = _parse_say_args(text)
+    lines = parse_lines(raw)
+    if not lines:
+        await ctx.reply(
+            f"ใช้: `{COMMAND_PREFIX}say <ข้อความ>` (หลายบรรทัดได้ 1 บรรทัด = 1 ประโยค) "
+            f"`[--mood <preset>]`\nmood: {', '.join(sorted(MOOD_PRESETS))}")
         return
-    if len(text) > MAX_CHARS:
-        await ctx.reply(f"⚠️ ข้อความยาวเกินไป ({len(text)} ตัวอักษร) — "
-                         f"จำกัดไม่เกิน {MAX_CHARS} ตัวอักษร")
+
+    # (spoken_text, mood ที่จะใช้จริง) ต่อบรรทัด — explicit --mood ชนะ emoji เสมอ
+    prepared: list[tuple[str, str | None]] = []
+    for line in lines:
+        spoken, auto_mood = extract_mood(line)
+        if not spoken:
+            continue  # บรรทัดที่เหลือแต่ emoji/ว่าง -> ข้าม
+        prepared.append((spoken, explicit_mood or auto_mood))
+    if not prepared:
+        await ctx.reply("ไม่มีข้อความให้พูด (บรรทัดว่าง/มีแต่ emoji ทั้งหมด)")
         return
-    try:
-        instruct = resolve_instruct(mood, None, False)
-    except ValueError as e:
-        await ctx.reply(f"⚠️ {e}")
+
+    total_chars = sum(len(spoken) for spoken, _ in prepared)
+    if total_chars > MAX_CHARS:
+        await ctx.reply(f"⚠️ ข้อความยาวเกินไป ({total_chars} ตัวอักษรรวมทุกบรรทัด "
+                         f"หลังตัด emoji) — จำกัดไม่เกิน {MAX_CHARS} ตัวอักษร")
         return
+
+    # resolve instruct ทุกบรรทัดก่อน (mood ผิด -> reject ทั้ง batch)
+    jobs_meta: list[tuple[str, str | None]] = []  # (spoken, instruct)
+    for spoken, mood in prepared:
+        try:
+            instruct = resolve_instruct(mood, None, False)
+        except ValueError as e:
+            await ctx.reply(f"⚠️ {e}")
+            return
+        jobs_meta.append((spoken, instruct))
 
     author_voice = getattr(ctx.author, "voice", None)
     if author_voice is None or author_voice.channel is None:
@@ -185,33 +211,41 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
         return
     voice_channel = author_voice.channel
 
-    # สร้างชื่อไฟล์ unique โดยไม่สร้างไฟล์ว่างล่วงหน้า — mlx_audio จะไม่เขียน
-    # ทับไฟล์ที่มีอยู่แล้ว (ทำให้ได้ไฟล์ 0 bytes เมื่อใช้ mkstemp)
-    wav_path = os.path.join(
-        tempfile.gettempdir(), f"qwen_say_{os.getpid()}_{int(time.time()*1000)}.wav")
-
+    # generate ครบทุกบรรทัดก่อน queue — บรรทัดใด fail -> ลบไฟล์ทั้ง batch, ไม่ queue
     t0 = time.time()
-    # TTS ผ่าน daemon fast path เท่านั้น — รันใน thread เสมอ ห้ามบล็อก event loop
-    ok = await asyncio.to_thread(
-        _try_daemon, text, wav_path, instruct, DEFAULT_VOICE, "wav")
-    if not ok:
-        try:
-            os.remove(wav_path)
-        except OSError:
-            pass
-        # Decision (ดู TTS-1001 plan): daemon ล่ม/ตอบ error -> แจ้งทันที
-        # ไม่ fallback ไปโหลดโมเดลเองในบอท (ต่างจาก qwen_clone_tts.py CLI ปกติ)
-        await ctx.reply("⚠️ TTS daemon ไม่พร้อมใช้งาน (ล่ม/ยังไม่ได้รัน หรือสร้าง"
-                         "เสียงไม่สำเร็จ) — ตรวจ log ของบอทและลองสตาร์ท "
-                         "`tts_daemon.py` แล้วลองใหม่")
-        return
+    wav_paths: list[str] = []
+    for idx, (spoken, instruct) in enumerate(jobs_meta):
+        wav_path = os.path.join(
+            tempfile.gettempdir(),
+            f"qwen_say_{os.getpid()}_{int(time.time()*1000)}_{idx}.wav")
+        ok = await asyncio.to_thread(
+            _try_daemon, spoken, wav_path, instruct, DEFAULT_VOICE, "wav")
+        if not ok:
+            for p in wav_paths:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+            # Decision (ดู TTS-1001 plan): daemon ล่ม/ตอบ error -> แจ้งทันที
+            # ไม่ fallback ไปโหลดโมเดลเองในบอท; batch เป็น atomic
+            await ctx.reply("⚠️ TTS daemon ไม่พร้อมใช้งาน (ล่ม/ยังไม่ได้รัน หรือสร้าง"
+                             "เสียงไม่สำเร็จ) — ไม่มีบรรทัดไหนถูกเล่น ตรวจ log ของบอท "
+                             "แล้วลองสตาร์ท `tts_daemon.py` ใหม่")
+            return
+        wav_paths.append(wav_path)
     gen_s = time.time() - t0
 
     playback = _get_playback(ctx.guild)
     playback.ensure_worker()
-    await playback.queue.put((voice_channel, ctx.channel, wav_path))
+    for wav_path in wav_paths:
+        await playback.queue.put((voice_channel, ctx.channel, wav_path))
     print(f"discord_say_bot: queued say guild={ctx.guild.id} "
-          f"gen_s={gen_s:.2f} mood={mood} chars={len(text)}",
+          f"lines={len(wav_paths)} gen_s={gen_s:.2f} "
+          f"explicit_mood={explicit_mood} chars={total_chars}",
           file=sys.stderr, flush=True)
 
 

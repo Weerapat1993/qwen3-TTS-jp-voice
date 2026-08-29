@@ -6,7 +6,7 @@ kanban-plugin: board
 
 ## BACKLOG
 
-- [TTS-1002](tasks/TTS-1002.md): ?say รับข้อความหลายบรรทัด (array) + auto mood จาก emoji
+- [TTS-1003](tasks/TTS-1003.md): ?say เปลี่ยนลิมิตเป็นต่อบรรทัด + จำนวนบรรทัดไม่จำกัด
 
 ## TODO
 
@@ -16,9 +16,9 @@ kanban-plugin: board
 
 ## REVIEW
 
-
 ## DONE
 
+- [TTS-1002](tasks/TTS-1002.md): ?say รับข้อความหลายบรรทัด (array) + auto mood จาก emoji
 - [TTS-1001](tasks/TTS-1001.md): Prefix command ?say ให้บอทพูดใน voice channel ด้วยเสียง Liino
 ## CLOSED
 
