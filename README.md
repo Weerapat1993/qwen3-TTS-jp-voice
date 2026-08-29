@@ -26,7 +26,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
 | **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
 | **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
-| **Discord voice bot** | Prefix command `?say <text> [--mood ...]` makes the bot join your voice channel and speak with the Liino voice, via the daemon fast path | `discord_say_bot.py` |
+| **Discord voice bot** | Prefix command `?say <text> [--mood ...]` — joins your voice channel and speaks with the Liino voice via the daemon; supports multi-line input and emoji auto-mood | `discord_say_bot.py` |
 
 ---
 
@@ -256,7 +256,24 @@ export DISCORD_BOT_TOKEN=...
 
 - **`?say <text>`** — joins the voice channel of the message author and speaks `<text>` with the Liino voice.
 - **`?say <text> --mood <preset>`** — same, but applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, etc.).
-- Text over `MAX_CHARS` (300) is rejected immediately with a readable error — it is never queued.
+- **Multi-line** — a `?say` message with several lines is spoken one line per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped.
+- **Emoji auto-mood** — the first recognised emoji on a line sets that line's mood and is removed from the spoken text (e.g. `😄สวัสดี` → says "สวัสดี" with the `excited` mood). An explicit `--mood <preset>` always overrides emoji. Unrecognised emoji are left in the text and don't change the mood. Emoji → mood map:
+
+  | mood | emoji |
+  |---|---|
+  | `excited` | 😄 😁 😃 🎉 ⚡ |
+  | `giggle` | 😆 🤣 😂 😹 |
+  | `surprised` | 😮 😲 😯 😱 |
+  | `sad` | 😢 😭 😔 💔 |
+  | `angry` | 😠 😡 😤 |
+  | `sleepy` | 😴 😪 🥱 |
+  | `whisper` | 🤫 🤐 |
+  | `gentle` | 🥺 🤗 💗 |
+  | `bored` | 😑 😐 🙄 |
+  | `storyteller` | 📖 📚 🧚 |
+
+- The `MAX_CHARS` (300) limit applies to the **combined** length of all lines after emoji removal — over the limit is rejected immediately with a readable error and never queued.
+- **Atomic batch** — if any line fails to generate (daemon down mid-batch), no line is played and the temp files are cleaned up.
 - If you're not in a voice channel when you run `?say`, the bot replies with an error and does not join anything.
 - **Playback queue per guild** — TTS generation always runs in a background thread (`asyncio.to_thread`) so it never blocks the bot's Discord heartbeat. Once audio is generated it's placed on a per-guild `asyncio.Queue`; a worker plays files one at a time via `discord.FFmpegPCMAudio`, waiting for each one to finish before starting the next — concurrent `?say` calls queue up instead of overlapping.
 - **Idle-leave** — after the queue is empty and playback finishes, the bot waits `VC_IDLE_TIMEOUT_S` seconds (default 60) and then disconnects from the voice channel automatically. A new `?say` before that timer elapses cancels the countdown.
@@ -269,6 +286,7 @@ export DISCORD_BOT_TOKEN=...
 | `DISCORD_BOT_TOKEN` | *(required, secret)* | Discord bot token — export as a process env var, never hardcode or commit it (not auto-loaded from `.env`) |
 | `DISCORD_COMMAND_PREFIX` | `?` | Prefix for the bot's text commands |
 | `VC_IDLE_TIMEOUT_S` | `60` | Seconds to wait in an idle voice channel (empty queue, nothing playing) before disconnecting |
+| `SAY_SENTENCE_GAP_S` | `0.5` | Seconds of silence inserted after each sentence before the next queued line plays. `0` disables it. |
 
 ---
 
