@@ -46,6 +46,8 @@ from qwen_clone_tts import LANG_CODES, MAX_CHARS, MOOD_PRESETS, _try_daemon, res
 from say_moods import MOOD_EMOJI, extract_mood, first_line_over_limit, parse_lines  # noqa: E402
 from stt_transcribe import WHISPER_MODEL, probe_duration, transcribe as run_stt  # noqa: E402
 from transcribe_mood import detect_mood  # noqa: E402
+import voice_store  # noqa: E402
+from voice_store import VoiceStoreError  # noqa: E402
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
@@ -58,6 +60,11 @@ DEFAULT_VOICE = "Liino"
 TRANSCRIBE_MAX_BYTES = 20 * 1024 * 1024
 TRANSCRIBE_MAX_DURATION_S = 600
 TRANSCRIBE_INLINE_MAX = 1800  # ยาวกว่านี้ -> ส่งเฉพาะไฟล์แนบ ไม่ preview ในแชท
+
+# /voice-clone limits (TTS-1009)
+VOICE_CLONE_MAX_BYTES = 25 * 1024 * 1024
+VOICE_CLONE_EXTS = (".mp3", ".wav", ".m4a", ".ogg")
+VOICE_CLONE_TEST_TEXT = "สวัสดีค่ะ นี่คือตัวอย่างเสียงพูดจากเสียงโคลนนี้"
 
 # slash command ไม่ต้องอ่านเนื้อความ -> ใช้ default intents (มี voice_states ที่ต้องใช้
 # อ่าน interaction.user.voice อยู่แล้ว) ห้ามเปิด message_content
@@ -436,6 +443,263 @@ async def transcribe(interaction: discord.Interaction,
             os.remove(audio_path)
         except OSError:
             pass
+
+
+# ---------- /voice-clone (TTS-1009) ----------
+
+voice_clone = app_commands.Group(
+    name="voice-clone",
+    description="สร้าง/จัดการเสียงโคลนสำหรับ /say (create/list/edit/delete/test)",
+    guild_only=True)
+tree.add_command(voice_clone)
+
+
+def _voices_summary() -> str:
+    voices = voice_store.list_voices()
+    if not voices:
+        return "ยังไม่มีเสียงใน voices/"
+    rows = []
+    for v in voices:
+        tag = "" if v["has_transcript"] else " (ไม่มี transcript)"
+        ins = f" — {v['instruction']}" if v["instruction"] else ""
+        rows.append(f"• {v['name']}{tag}{ins}")
+    return "\n".join(rows)
+
+
+@voice_clone.command(name="list", description="แสดงเสียงทั้งหมดใน voices/")
+async def voice_clone_list(interaction: discord.Interaction) -> None:
+    body = _voices_summary().replace("```", "`​`​`")
+    await interaction.response.send_message(
+        f"🎙️ เสียงที่มี:\n```\n{body}\n```", ephemeral=True)
+
+
+@voice_clone.command(
+    name="create", description="โคลนเสียงใหม่จากไฟล์เสียงที่อัปโหลด")
+@app_commands.describe(
+    name="ชื่อเสียง (a-z, 0-9, _ เท่านั้น)",
+    file="ไฟล์เสียงอ้างอิง .mp3/.wav/.m4a/.ogg (≤ 25 MB, ≥ 3 วิ)",
+    instruction="คำบรรยายน้ำเสียงประจำตัวละคร (สั้น, อังกฤษ) — optional",
+    overwrite="ทับเสียงชื่อเดิมถ้ามีอยู่แล้ว")
+async def voice_clone_create(interaction: discord.Interaction, name: str,
+                             file: discord.Attachment,
+                             instruction: str | None = None,
+                             overwrite: bool = False) -> None:
+    try:
+        clean = voice_store.sanitize_name(name)
+    except VoiceStoreError as e:
+        await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    if not file.filename.lower().endswith(VOICE_CLONE_EXTS):
+        await interaction.response.send_message(
+            f"ไฟล์ต้องเป็น {', '.join(VOICE_CLONE_EXTS)}", ephemeral=True)
+        return
+    if file.size > VOICE_CLONE_MAX_BYTES:
+        await interaction.response.send_message(
+            "ไฟล์ใหญ่เกิน 25 MB", ephemeral=True)
+        return
+    if voice_store.is_reserved(clean) and not overwrite:
+        await interaction.response.send_message(
+            f"⚠️ `{clean}` เป็นเสียง default — ใส่ `overwrite:true` ถ้าตั้งใจจริง",
+            ephemeral=True)
+        return
+    if voice_store.voice_exists(clean) and not overwrite:
+        await interaction.response.send_message(
+            f"⚠️ เสียง `{clean}` มีอยู่แล้ว — ใส่ `overwrite:true` เพื่อทับ",
+            ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    ext = os.path.splitext(file.filename.lower())[1]
+    src_path = os.path.join(
+        tempfile.gettempdir(),
+        f"qwen_vc_{os.getpid()}_{int(time.time()*1000)}{ext}")
+    wav_path, txt_path, _ = voice_store.voice_paths(clean)
+    try:
+        try:
+            await file.save(src_path)
+        except discord.DiscordException as e:  # noqa: BLE001
+            await interaction.followup.send(
+                f"ดาวน์โหลดไฟล์ไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        try:
+            dur = await asyncio.to_thread(
+                voice_store.prepare_ref_audio, src_path, wav_path)
+        except VoiceStoreError as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+        try:
+            lines = await asyncio.to_thread(run_stt, wav_path, None)
+        except Exception as e:  # noqa: BLE001
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+            print(f"discord_say_bot: voice-clone STT error: {e}",
+                  file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                f"ถอดเสียงอ้างอิงไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        transcript = " ".join(lines).strip()
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(transcript + "\n")
+        if instruction:
+            voice_store.write_instruction(clean, instruction)
+
+        preview = transcript or "(ถอดเสียงไม่พบข้อความ — เสียงอาจไม่มีคำพูด)"
+        safe = preview.replace("```", "`​`​`")
+        await interaction.followup.send(
+            f"✅ สร้างเสียง `{clean}` แล้ว ({dur:.1f}s ต้นฉบับ)\n"
+            f"ตรวจ transcript ที่ถอดได้ (แก้ที่ `voices/{clean}.txt` ได้):\n"
+            f"```\n{safe}\n```", ephemeral=True)
+        print(f"discord_say_bot: voice-clone create guild={interaction.guild.id} "
+              f"name={clean} src_bytes={file.size} dur_s={dur:.1f} "
+              f"transcript_len={len(transcript)} instruction={bool(instruction)}",
+              file=sys.stderr, flush=True)
+    finally:
+        try:
+            os.remove(src_path)
+        except OSError:
+            pass
+
+
+@voice_clone.command(
+    name="edit", description="แก้ instruction หรือเปลี่ยนชื่อเสียง")
+@app_commands.describe(
+    name="ชื่อเสียงปัจจุบัน",
+    instruction="instruction ใหม่ (ส่งค่าว่างเพื่อลบ instruction เดิม)",
+    rename="ชื่อใหม่ (a-z, 0-9, _)")
+async def voice_clone_edit(interaction: discord.Interaction, name: str,
+                           instruction: str | None = None,
+                           rename: str | None = None) -> None:
+    if instruction is None and rename is None:
+        await interaction.response.send_message(
+            "ต้องระบุอย่างน้อย `instruction:` หรือ `rename:`", ephemeral=True)
+        return
+    try:
+        clean = voice_store.sanitize_name(name)
+    except VoiceStoreError as e:
+        await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    if not voice_store.voice_exists(clean):
+        await interaction.response.send_message(
+            f"⚠️ ไม่พบเสียง `{clean}`", ephemeral=True)
+        return
+
+    changes: list[str] = []
+    if instruction is not None:
+        if voice_store.is_reserved(clean):
+            await interaction.response.send_message(
+                f"⚠️ แก้ instruction ของ `{clean}` (default voice) ไม่ได้",
+                ephemeral=True)
+            return
+        voice_store.write_instruction(clean, instruction)
+        changes.append("instruction ถูกลบ" if not instruction.strip()
+                       else "instruction อัปเดตแล้ว")
+
+    final_name = clean
+    if rename is not None:
+        try:
+            new_clean = voice_store.sanitize_name(rename)
+            voice_store.rename_voice(clean, new_clean)
+        except VoiceStoreError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        final_name = new_clean
+        changes.append(f"เปลี่ยนชื่อเป็น `{new_clean}`")
+
+    await interaction.response.send_message(
+        f"✏️ `{clean}`: " + ", ".join(changes), ephemeral=True)
+    print(f"discord_say_bot: voice-clone edit guild={interaction.guild.id} "
+          f"name={clean} -> {final_name} changes={changes}",
+          file=sys.stderr, flush=True)
+
+
+@voice_clone.command(name="delete", description="ลบเสียง (ต้อง confirm:true)")
+@app_commands.describe(name="ชื่อเสียงที่จะลบ", confirm="ต้องใส่ true เพื่อยืนยัน")
+async def voice_clone_delete(interaction: discord.Interaction, name: str,
+                             confirm: bool = False) -> None:
+    try:
+        clean = voice_store.sanitize_name(name)
+    except VoiceStoreError as e:
+        await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    if not confirm:
+        await interaction.response.send_message(
+            f"⚠️ ยืนยันด้วย `/voice-clone delete name:{clean} confirm:true`",
+            ephemeral=True)
+        return
+    try:
+        removed = voice_store.delete_voice(clean)
+    except VoiceStoreError as e:
+        await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"🗑️ ลบเสียง `{clean}` แล้ว ({', '.join(removed)})", ephemeral=True)
+    print(f"discord_say_bot: voice-clone delete guild={interaction.guild.id} "
+          f"name={clean} removed={removed}", file=sys.stderr, flush=True)
+
+
+@voice_clone.command(
+    name="test", description="ทดลองสร้างเสียงพูดด้วยเสียงนี้")
+@app_commands.describe(
+    name="ชื่อเสียงที่จะทดสอบ",
+    text="ข้อความทดสอบ (ไม่ระบุ = ประโยคเริ่มต้น)",
+    mood="โทนเสียง (ไม่ระบุ = ใช้ instruction ประจำเสียง หรือ default)")
+@app_commands.choices(
+    mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)])
+async def voice_clone_test(interaction: discord.Interaction, name: str,
+                           text: str | None = None,
+                           mood: str | None = None) -> None:
+    try:
+        clean = voice_store.sanitize_name(name)
+    except VoiceStoreError as e:
+        await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    if not voice_store.voice_exists(clean):
+        await interaction.response.send_message(
+            f"⚠️ ไม่พบเสียง `{clean}`", ephemeral=True)
+        return
+    spoken = (text or VOICE_CLONE_TEST_TEXT).strip()
+    if len(spoken) > MAX_CHARS:
+        await interaction.response.send_message(
+            f"ข้อความยาวเกิน {MAX_CHARS} ตัวอักษร", ephemeral=True)
+        return
+    # instruct: mood > voice instruction > default (ไม่แตะ resolve_instruct — TTS-1010)
+    if mood:
+        instruct = MOOD_PRESETS[mood]
+    else:
+        instruct = voice_store.read_instruction(clean) or MOOD_PRESETS["default"]
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    wav_path = os.path.join(
+        tempfile.gettempdir(),
+        f"qwen_vctest_{os.getpid()}_{int(time.time()*1000)}.wav")
+    t0 = time.time()
+    ok = await asyncio.to_thread(
+        _try_daemon, spoken, wav_path, instruct, clean, "wav", "auto")
+    gen_s = time.time() - t0
+    if not ok:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+        await interaction.followup.send(
+            "⚠️ TTS daemon ไม่พร้อมใช้งาน หรือสร้างเสียงไม่สำเร็จ", ephemeral=True)
+        return
+    try:
+        await interaction.followup.send(
+            f"🎧 ตัวอย่างเสียง `{clean}` (gen {gen_s:.1f}s)",
+            file=discord.File(wav_path, filename=f"{clean}_test.wav"),
+            ephemeral=True)
+    finally:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+    print(f"discord_say_bot: voice-clone test guild={interaction.guild.id} "
+          f"name={clean} mood={mood} chars={len(spoken)} gen_s={gen_s:.2f}",
+          file=sys.stderr, flush=True)
 
 
 def main() -> int:
