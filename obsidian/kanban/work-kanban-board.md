@@ -8,9 +8,9 @@ kanban-plugin: board
 
 ## TODO
 
-- [TTS-1007](tasks/TTS-1007.md): เพิ่ม mood presets ใหม่ (งอน/เขิน/ภูมิใจ/กังวล) + A/B validate ว่าโมเดลแยกเสียงจริง
-
 ## PLAN
+
+- [TTS-1007](tasks/TTS-1007.md): เพิ่ม mood presets ใหม่ (งอน/เขิน/ภูมิใจ/กังวล) + A/B validate ว่าโมเดลแยกเสียงจริง
 
 ## INPROGRESS
 
