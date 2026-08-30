@@ -7,7 +7,8 @@ import socket
 import pytest
 
 import qwen_clone_tts
-from qwen_clone_tts import LANG_CODES, MODEL_PATH, resolve_lang, _try_daemon
+from qwen_clone_tts import (LANG_CODES, MODEL_PATH, MOOD_PRESETS,
+                            resolve_instruct, resolve_lang, _try_daemon)
 
 
 def test_resolve_lang_none_is_auto():
@@ -34,6 +35,31 @@ def test_resolve_lang_rejects_unknown():
 def test_lang_codes_has_auto_first_and_is_sorted_rest():
     assert LANG_CODES[0] == "auto"
     assert list(LANG_CODES[1:]) == sorted(LANG_CODES[1:])
+
+
+# ---------- resolve_instruct (mood > instruct > MOOD_PRESETS["default"]) ----------
+# instruct_long/--instruct-long ถูกลบออก (chore) — เสียงยาวสไตล์เดิมยังเรียกได้
+# ผ่าน --mood long เหมือนเดิม เพราะ MOOD_PRESETS["long"] ยังอยู่
+
+def test_resolve_instruct_falls_back_to_mood_preset_default():
+    assert resolve_instruct(None, None) == MOOD_PRESETS["default"]
+
+
+def test_resolve_instruct_mood_wins_over_instruct():
+    assert resolve_instruct("excited", "custom") == MOOD_PRESETS["excited"]
+
+
+def test_resolve_instruct_explicit_instruct_used_when_no_mood():
+    assert resolve_instruct(None, "custom instruct") == "custom instruct"
+
+
+def test_resolve_instruct_unknown_mood_raises():
+    with pytest.raises(ValueError):
+        resolve_instruct("nope", None)
+
+
+def test_resolve_instruct_mood_long_still_reachable():
+    assert resolve_instruct("long", None) == qwen_clone_tts.DEFAULT_INSTRUCT_LONG
 
 
 class _FakeSock:

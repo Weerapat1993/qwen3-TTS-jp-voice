@@ -158,7 +158,7 @@ python qwen_clone_tts.py \
 | `--out PATH` | no (default temp file) | Output audio path |
 | `--mp3` | no | Convert output to `.mp3` via ffmpeg instead of `.wav` |
 | `--instruct "..."` | no | Free-text tone/style description, e.g. `"calm British narrator"` |
-| `--instruct-long` | no | Use the built-in long-form default instruct preset instead of `--instruct` |
+| `--mood NAME` | no | Named tone preset (see mood list below); `long` reproduces the old long-form default instruct |
 | `--lang CODE` | no (default `auto`) | Output language for the TTS model. `auto` lets the model infer it from the text. Valid: `auto, chinese, english, french, german, italian, japanese, korean, portuguese, russian, spanish`. **Thai is not a model language — Thai text uses `auto`.** |
 
 **File / stdin mode** (reads text from a file, auto-chunks it, always uses the `Liino` voice):
@@ -166,7 +166,7 @@ python qwen_clone_tts.py \
 ```bash
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.mp3 --mp3
-python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav --instruct-long
+python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav --mood long
 python qwen_clone_tts.py --stdin path/to/input.ja.txt out.wav --lang japanese
 ```
 

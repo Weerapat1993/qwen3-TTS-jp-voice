@@ -25,7 +25,7 @@ VOICES_DIR = os.path.join(PROJ, "voices")
 MODEL_PATH = os.path.join(PROJ, "models", "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 MAX_CHARS = 300
 DEFAULT_INSTRUCT = "Cheerful, bright, playful young female voice. Clear and friendly, natural pace, not childish."
-# Instruct เดิม (ยาว) — เสียงสไตล์เดิม ใช้ผ่าน --instruct-long หรือ --instruct แบบระบุเอง
+# Instruct เดิม (ยาว) — เสียงสไตล์เดิม ใช้ผ่าน --mood long หรือ --instruct แบบระบุเอง
 DEFAULT_INSTRUCT_LONG = (
     "A youthful Japanese female anime game character voice. "
     "Clear, bright, soft, and feminine timbre with a slightly high pitch. "
@@ -100,11 +100,12 @@ def resolve_lang(lang: str | None) -> str:
     return code
 
 
-def resolve_instruct(mood: str | None, instruct: str | None,
-                     instruct_long: bool) -> str | None:
-    """เลือก instruct: --mood มีลำดับความสำคัญก่อน --instruct / --instruct-long"""
-    if instruct_long:
-        return DEFAULT_INSTRUCT_LONG
+def resolve_instruct(mood: str | None, instruct: str | None) -> str | None:
+    """เลือก instruct: --mood มีลำดับความสำคัญก่อน --instruct
+
+    (instruct_long/--instruct-long ถูกลบออก — เสียงยาวสไตล์เดิมยังเรียกได้ผ่าน
+    --mood long เหมือนเดิม)
+    """
     if mood:
         m = mood.strip().lower()
         if m not in MOOD_PRESETS:
@@ -337,8 +338,6 @@ def main() -> int:
     # โหมด Hermes provider: --stdin <input_path> <output_path>
     if "--stdin" in sys.argv:
         rest = [a for a in sys.argv[1:] if a not in ("--stdin",)]
-        instruct_long = "--instruct-long" in rest
-        rest = [a for a in rest if a != "--instruct-long"]
         if len(rest) < 1:
             print("usage: --stdin <input_path> [output_path]",
                   file=sys.stderr)
@@ -367,8 +366,7 @@ def main() -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
         try:
-            instruct = resolve_instruct(mood, None,
-                                        "--instruct-long" in rest)
+            instruct = resolve_instruct(mood, None)
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
@@ -383,8 +381,6 @@ def main() -> int:
                     help="แปลงผลลัพธ์เป็น .mp3 (ffmpeg libmp3lame)")
     ap.add_argument("--instruct", default=None,
                     help="คำบรรยายน้ำเสียง เช่น 'cheerful idol voice'")
-    ap.add_argument("--instruct-long", action="store_true",
-                    help="ใช้ instruct ยาวสไตล์เดิม (full_default)")
     ap.add_argument("--mood", default=None,
                     choices=sorted(MOOD_PRESETS),
                     help="น้ำเสียงสำเร็จรูป เช่น excited, sleepy, whisper")
@@ -395,8 +391,7 @@ def main() -> int:
     out_path = args.out or os.path.join(
         tempfile.gettempdir(), "qwen_clone_out.wav")
     try:
-        instruct = resolve_instruct(args.mood, args.instruct,
-                                    args.instruct_long)
+        instruct = resolve_instruct(args.mood, args.instruct)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
