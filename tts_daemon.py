@@ -261,6 +261,13 @@ def handle_request(model_holder, req: dict, queue_wait_s: float = 0.0) -> dict:
                          f"{', '.join(LANG_CODES)}",
                 "cached": False, "queue_wait_s": round(queue_wait_s, 2),
                 "format": fmt}
+    if out_path and not os.path.isabs(out_path):
+        # daemon cwd = / (launchd) — relative path จะ resolve ผิดที่แล้ว mlx
+        # โยน traceback งง ๆ; ปฏิเสธชัด ๆ ให้ client ส่ง absolute มา
+        return {"ok": False, "out_path": out_path, "gen_s": 0.0,
+                "error": f"out_path must be absolute, got '{out_path}'",
+                "cached": False, "queue_wait_s": round(queue_wait_s, 2),
+                "format": fmt}
     if len(text) > MAX_CHARS:
         # ข้อความยาวปิด feature แล้ว — ปฏิเสธพร้อม error ชัดเจน
         return {"ok": False, "out_path": out_path or "",

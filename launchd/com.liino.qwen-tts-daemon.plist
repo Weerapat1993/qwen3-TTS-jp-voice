@@ -15,6 +15,10 @@
         <string>/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/.venv/bin/python</string>
         <string>/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/tts_daemon.py</string>
     </array>
+    <!-- defense-in-depth: relative path ที่หลุดมาจะ resolve เข้า project root
+         แทน / (daemon ปฏิเสธ relative out_path อยู่แล้ว — ดู handle_request) -->
+    <key>WorkingDirectory</key>
+    <string>/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

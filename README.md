@@ -186,6 +186,21 @@ Background service that loads the model **once** and serves generation requests 
 
 Or install as a launchd background service — see `launchd/com.liino.qwen-tts-daemon.plist` (edit paths for your install, then `launchctl load` it; you must reinstall the service yourself after editing the plist).
 
+### Restart it
+
+`./restart_daemon.sh` wraps the `launchctl` incantations:
+
+```bash
+./restart_daemon.sh              # kickstart -k — pick up new tts_daemon.py code
+./restart_daemon.sh --reinstall  # copy the repo plist into ~/Library/LaunchAgents/ then unload/load
+                                 #   (needed whenever the plist changes — e.g. WorkingDirectory, env, Nice)
+./restart_daemon.sh --manual     # unload the launchd agent, run tts_daemon.py in the foreground with live logs
+./restart_daemon.sh --clear-cache# wipe TTS_CACHE_DIR before restarting
+./restart_daemon.sh --verify     # after restart, fire one real request and fail unless it hits the daemon fast path
+```
+
+Flags combine (`./restart_daemon.sh --reinstall --verify`). The script honours `TTS_DAEMON_SOCK` / `TTS_CACHE_DIR` / `TTS_TELEMETRY_LOG` overrides and waits (up to 20s) for the socket to come back after the model reloads. `--manual` does not re-load the agent for you — it prints the `launchctl load` command to run when you're done.
+
 ### Behavior
 
 - **FIFO queue** — requests are served one at a time, in order. A job that is already generating is never cancelled mid-flight.
@@ -219,6 +234,8 @@ Send one JSON object + `\n` over the Unix socket; receive one JSON response + `\
 ```
 
 `lang` is optional and defaults to `"auto"` (omitting it is identical to sending `"auto"`). Valid values are `auto` plus the model's language codes: `chinese, english, french, german, italian, japanese, korean, portuguese, russian, spanish`. An unknown code returns `ok: false`.
+
+`out_path` **must be an absolute path**. The daemon's working directory is not the caller's (a `launchd`-run daemon has cwd `/`), so a relative path would be written in the wrong place — the daemon rejects it with `ok: false` / `error: "out_path must be absolute"`. The `qwen_clone_tts.py` client handles this automatically by `os.path.abspath()`-ing `out_path` before sending.
 
 The `qwen_clone_tts.py` client already implements this protocol — talk to the daemon directly only if you're building a new client.
 
