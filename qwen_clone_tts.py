@@ -256,18 +256,17 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
                    fmt="mp3" if mp3 else "wav", lang=lang):
         return 0
 
+    if len(text) > MAX_CHARS:
+        print(f"ERROR: text is {len(text)} chars — max is {MAX_CHARS} "
+              f"(use multiple [mood:xxx] segments via --stdin to split "
+              f"longer text)", file=sys.stderr)
+        return 1
+
     ref_text = None
     txt_path = os.path.join(VOICES_DIR, f"{voice}.txt")
     if os.path.exists(txt_path):
         with open(txt_path, "r", encoding="utf-8") as f:
             ref_text = f.read().strip()
-
-    chunks = chunk_text(text)
-    if len(text) > MAX_CHARS:
-        print(f"ERROR: text is {len(text)} chars — max is {MAX_CHARS} "
-              f"(long-text chunking is disabled)", file=sys.stderr)
-        return 1
-    multi = False
 
     t0 = time.time()
     from mlx_audio.tts.utils import load_model
@@ -277,76 +276,24 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
     load_s = time.time() - t0
 
     t1 = time.time()
-    if multi:
-        # สร้างเสียงทีละ chunk แล้ว concat ด้วย ffmpeg เป็นไฟล์เดียว
-        import shutil
-        import subprocess
-        if shutil.which("ffmpeg") is None:
-            print("ERROR: ffmpeg not found for concat", file=sys.stderr)
+    generate_audio(model=model, text=text, ref_audio=ref_audio,
+                   ref_text=ref_text, instruct=instruct, lang_code=lang,
+                   output_path=out_path)
+    # หาไฟล์ที่ mlx_audio เขียนจริง (บางครั้งต่อท้ายเลขนับ)
+    if os.path.isdir(out_path):
+        cands = sorted(
+            (os.path.join(out_path, f) for f in os.listdir(out_path)
+             if f.endswith((".wav", ".mp3"))),
+            key=os.path.getmtime)
+        if not cands:
+            print("ERROR: no audio produced", file=sys.stderr)
             return 1
-        tmpdir = tempfile.mkdtemp(prefix="qwen_clone_chunks_")
-        part_paths: list[str] = []
-        try:
-            for i, chunk in enumerate(chunks):
-                part = os.path.join(tmpdir, f"part_{i:03d}.wav")
-                # suppress tqdm progress bars จาก mlx_audio ในลูป
-                with contextlib.redirect_stderr(io.StringIO()), \
-                        contextlib.redirect_stdout(io.StringIO()):
-                    generate_audio(model=model, text=chunk,
-                                   ref_audio=ref_audio, ref_text=ref_text,
-                                   instruct=instruct, lang_code=lang,
-                                   output_path=part)
-                if os.path.isdir(part):
-                    cands = sorted(
-                        (os.path.join(part, f) for f in os.listdir(part)
-                         if f.endswith((".wav", ".mp3"))),
-                        key=os.path.getmtime)
-                    if not cands:
-                        print(f"ERROR: no audio for chunk {i}",
-                              file=sys.stderr)
-                        return 1
-                    part = cands[-1]
-                elif not os.path.exists(part):
-                    print(f"ERROR: chunk {i} output missing", file=sys.stderr)
-                    return 1
-                part_paths.append(part)
-            list_file = os.path.join(tmpdir, "list.txt")
-            with open(list_file, "w", encoding="utf-8") as f:
-                for p in part_paths:
-                    f.write(f"file '{p}'\n")
-            final_out = out_path
-            os.makedirs(os.path.dirname(final_out) or ".", exist_ok=True)
-            r = subprocess.run(
-                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                 "-f", "concat", "-safe", "0", "-i", list_file,
-                 "-ar", "24000", "-ac", "1", final_out],
-                capture_output=True, text=True)
-            if r.returncode != 0 or not os.path.exists(final_out):
-                print(f"ERROR: ffmpeg concat failed: {r.stderr}",
-                      file=sys.stderr)
-                return 1
-            final = final_out
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        final = cands[-1]
+    elif os.path.exists(out_path):
+        final = out_path
     else:
-        generate_audio(model=model, text=text, ref_audio=ref_audio,
-                       ref_text=ref_text, instruct=instruct, lang_code=lang,
-                       output_path=out_path)
-        # หาไฟล์ที่ mlx_audio เขียนจริง (บางครั้งต่อท้ายเลขนับ)
-        if os.path.isdir(out_path):
-            cands = sorted(
-                (os.path.join(out_path, f) for f in os.listdir(out_path)
-                 if f.endswith((".wav", ".mp3"))),
-                key=os.path.getmtime)
-            if not cands:
-                print("ERROR: no audio produced", file=sys.stderr)
-                return 1
-            final = cands[-1]
-        elif os.path.exists(out_path):
-            final = out_path
-        else:
-            print("ERROR: output missing", file=sys.stderr)
-            return 1
+        print("ERROR: output missing", file=sys.stderr)
+        return 1
 
     gen_s = time.time() - t1
 
@@ -501,13 +448,29 @@ def main() -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
         from voice_store import read_instruction
+        voice_default = read_instruction("Liino")
         try:
-            instruct = resolve_instruct(mood, None, read_instruction("Liino"))
+            segments = split_mood_segments(text)
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
-        return _run("Liino", text, out_path, instruct,
-                    mp3="--mp3" in rest, lang=lang)
+        if not segments:
+            print("ERROR: no text content after mood-tag parsing",
+                  file=sys.stderr)
+            return 1
+        if len(segments) == 1:
+            # ไม่มี [mood:xxx] tag เลย (mood_key=None -> ใช้ --mood flag เดิม),
+            # หรือมี tag เดียวคลุมทั้งไฟล์ -> job เดียว ไม่ต้อง concat
+            mood_key, seg_text = segments[0]
+            try:
+                instruct = resolve_instruct(mood_key or mood, None, voice_default)
+            except ValueError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 2
+            return _run("Liino", seg_text, out_path, instruct,
+                        mp3="--mp3" in rest, lang=lang)
+        return _run_multi("Liino", segments, voice_default, out_path,
+                          mp3="--mp3" in rest, lang=lang)
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--text", required=True, help="ข้อความที่จะให้อ่าน")
