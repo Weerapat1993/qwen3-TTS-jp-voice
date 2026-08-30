@@ -25,25 +25,11 @@ VOICES_DIR = os.path.join(PROJ, "voices")
 MODEL_PATH = os.path.join(PROJ, "models", "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 MAX_CHARS = 300
 DEFAULT_INSTRUCT = "Cheerful, bright, playful young female voice. Clear and friendly, natural pace, not childish."
-# Instruct เดิม (ยาว) — เสียงสไตล์เดิม ใช้ผ่าน --mood long หรือ --instruct แบบระบุเอง
-DEFAULT_INSTRUCT_LONG = (
-    "A youthful Japanese female anime game character voice. "
-    "Clear, bright, soft, and feminine timbre with a slightly high pitch. "
-    "She sounds cheerful, lively, curious, and friendly, with a subtle "
-    "playful quality. Her voice is expressive and energetic but remains "
-    "natural and conversational. Use clear Japanese pronunciation, natural "
-    "Japanese intonation, and a moderate speaking pace. Add gentle "
-    "emotional variation to make the character sound lively and "
-    "spontaneous. The overall impression is a charming, energetic young "
-    "female game character who is approachable and slightly mischievous. "
-    "Do not make the voice overly childish, squeaky, breathy, or "
-    "exaggerated.")
 
 
 MOOD_PRESETS: dict[str, str] = {
     # ชื่อ mood -> instruct ที่ส่งให้โมเดล (ภาษาอังกฤษเพื่อความแม่นของโมเดล)
     "default":   DEFAULT_INSTRUCT,
-    "long":      DEFAULT_INSTRUCT_LONG,
     "excited":   "Very excited and enthusiastic young female voice, "
                  "fast-paced and energetic, sparkling with joy.",
     "sleepy":    "Soft, drowsy, relaxed young female voice. Slow pace, "
@@ -104,9 +90,6 @@ def resolve_instruct(mood: str | None, instruct: str | None,
                      voice_default: str | None = None) -> str | None:
     """เลือก instruct ตามลำดับ: mood > instruct (explicit) >
     voice_default (จาก <voice>.instruct.txt) > MOOD_PRESETS["default"]
-
-    (instruct_long/--instruct-long ถูกลบออก — เสียงยาวสไตล์เดิมยังเรียกได้ผ่าน
-    --mood long เหมือนเดิม)
 
     voice_default เป็น keyword param ท้ายพร้อม default None เพื่อ backward-compat
     กับผู้เรียกเดิมที่ส่งแค่ 2 args (Hermes/CLI/tune_voice.py)
@@ -372,8 +355,9 @@ def main() -> int:
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
+        from voice_store import read_instruction
         try:
-            instruct = resolve_instruct(mood, None)
+            instruct = resolve_instruct(mood, None, read_instruction("Liino"))
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2

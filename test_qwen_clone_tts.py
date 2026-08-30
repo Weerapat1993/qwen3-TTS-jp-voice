@@ -39,8 +39,6 @@ def test_lang_codes_has_auto_first_and_is_sorted_rest():
 
 # ---------- resolve_instruct (mood > instruct > voice_default >
 # MOOD_PRESETS["default"]) ----------
-# instruct_long/--instruct-long ถูกลบออก (chore) — เสียงยาวสไตล์เดิมยังเรียกได้
-# ผ่าน --mood long เหมือนเดิม เพราะ MOOD_PRESETS["long"] ยังอยู่
 
 def test_resolve_instruct_2args_backward_compat():
     # ผู้เรียกเดิม (Hermes/CLI/tune_voice.py) ส่งแค่ 2 args — ต้องยังทำงาน
@@ -64,10 +62,6 @@ def test_resolve_instruct_voice_default_wins_over_mood_preset_default():
 
 def test_resolve_instruct_falls_back_to_mood_preset_default():
     assert resolve_instruct(None, None, None) == MOOD_PRESETS["default"]
-
-
-def test_resolve_instruct_mood_long_still_reachable():
-    assert resolve_instruct("long", None) == qwen_clone_tts.DEFAULT_INSTRUCT_LONG
 
 
 def test_resolve_instruct_unknown_mood_raises():
