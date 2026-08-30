@@ -25,8 +25,11 @@ Env vars:
                           ไม่ตั้ง = global registration (ครั้งแรกรอ propagate ได้ถึง ~1 ชม.)
     VC_IDLE_TIMEOUT_S     (default 60) วินาทีที่รอก่อนออกจาก VC หลังคิวเล่นเสียงว่าง
     SAY_SENTENCE_GAP_S   (default 0.5) วินาทีที่เว้นเงียบหลังจบแต่ละประโยคก่อนเล่นบรรทัดถัดไป (0 = ปิด)
+    TRANSCRIBE_WHISPER_MODEL  (default mlx-community/whisper-large-v3-turbo) โมเดล Whisper
+                          ที่ /transcribe ใช้ถอดเสียง — โหลดครั้งแรก ~1.6 GB ลง HF cache
 """
 import asyncio
+import io
 import os
 import sys
 import tempfile
@@ -40,7 +43,9 @@ sys.path.insert(0, PROJ)
 
 # reuse ของเดิมจาก qwen_clone_tts.py ทั้งหมด — ห้าม duplicate ค่า/logic
 from qwen_clone_tts import MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
-from say_moods import extract_mood, first_line_over_limit, parse_lines  # noqa: E402
+from say_moods import MOOD_EMOJI, extract_mood, first_line_over_limit, parse_lines  # noqa: E402
+from stt_transcribe import WHISPER_MODEL, probe_duration, transcribe as run_stt  # noqa: E402
+from transcribe_mood import detect_mood  # noqa: E402
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
@@ -48,6 +53,11 @@ VC_IDLE_TIMEOUT_S = float(os.environ.get("VC_IDLE_TIMEOUT_S", "60"))
 SAY_SENTENCE_GAP_S = float(os.environ.get("SAY_SENTENCE_GAP_S", "0.5"))
 
 DEFAULT_VOICE = "Liino"
+
+# /transcribe limits (TTS-1005)
+TRANSCRIBE_MAX_BYTES = 20 * 1024 * 1024
+TRANSCRIBE_MAX_DURATION_S = 600
+TRANSCRIBE_INLINE_MAX = 1800  # ยาวกว่านี้ -> ส่งเฉพาะไฟล์แนบ ไม่ preview ในแชท
 
 # slash command ไม่ต้องอ่านเนื้อความ -> ใช้ default intents (มี voice_states ที่ต้องใช้
 # อ่าน interaction.user.voice อยู่แล้ว) ห้ามเปิด message_content
@@ -311,6 +321,102 @@ async def say(interaction: discord.Interaction, text: str | None = None,
           f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
           f"explicit_mood={explicit_mood} chars={total_chars}",
           file=sys.stderr, flush=True)
+
+
+@tree.command(
+    name="transcribe",
+    description="ถอดเสียงไฟล์เสียงเป็นข้อความ + emoji mood พร้อมใช้กับ /say")
+@app_commands.guild_only()
+@app_commands.describe(
+    file="ไฟล์เสียง .mp3 หรือ .wav (≤ 20 MB, ≤ 10 นาที)",
+    mood="บังคับ mood ทุกบรรทัด (ไม่เลือก = auto จากข้อความ)")
+@app_commands.choices(mood=[
+    app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)])
+async def transcribe(interaction: discord.Interaction,
+                     file: discord.Attachment,
+                     mood: str | None = None) -> None:
+    # pre-defer validation — error ทุกจุดตรงนี้เป็น ephemeral, ไม่โพสต์ลงแชท
+    if not file.filename.lower().endswith((".mp3", ".wav")):
+        await interaction.response.send_message(
+            "ไฟล์ต้องเป็น `.mp3` หรือ `.wav`", ephemeral=True)
+        return
+    if file.size > TRANSCRIBE_MAX_BYTES:
+        await interaction.response.send_message(
+            "ไฟล์ใหญ่เกิน 20 MB", ephemeral=True)
+        return
+
+    # STT ช้ากว่า 3 วิแน่ -> defer ก่อน (spinner เห็นเฉพาะคนสั่ง)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    ext = ".mp3" if file.filename.lower().endswith(".mp3") else ".wav"
+    audio_path = os.path.join(
+        tempfile.gettempdir(),
+        f"qwen_transcribe_{os.getpid()}_{int(time.time()*1000)}{ext}")
+    try:
+        try:
+            await file.save(audio_path)
+        except discord.DiscordException as e:  # noqa: BLE001
+            await interaction.followup.send(
+                f"ดาวน์โหลดไฟล์ไม่สำเร็จ: {e}", ephemeral=True)
+            return
+
+        try:
+            duration = await asyncio.to_thread(probe_duration, audio_path)
+        except RuntimeError as e:
+            print(f"discord_say_bot: transcribe probe error: {e}",
+                  file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                "อ่านไฟล์เสียงไม่สำเร็จ (ไฟล์เสียหายหรือไม่ใช่ไฟล์เสียง)",
+                ephemeral=True)
+            return
+        if duration > TRANSCRIBE_MAX_DURATION_S:
+            await interaction.followup.send(
+                f"เสียงยาวเกิน 10 นาที ({duration / 60:.1f} นาที)",
+                ephemeral=True)
+            return
+
+        t0 = time.time()
+        try:
+            lines = await asyncio.to_thread(run_stt, audio_path)
+        except Exception as e:  # noqa: BLE001
+            print(f"discord_say_bot: transcribe STT error: {e}",
+                  file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                f"ถอดเสียงไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        stt_s = time.time() - t0
+
+        if not lines:
+            await interaction.followup.send(
+                "ถอดเสียงไม่พบข้อความ (เสียงเงียบหรือไม่มีคำพูด)",
+                ephemeral=True)
+            return
+
+        composed: list[str] = []
+        for line in lines:
+            m = mood or detect_mood(line)
+            prefix = f"{MOOD_EMOJI[m]} " if m in MOOD_EMOJI else ""
+            composed.append(f"{prefix}{line}")
+        body = "\n".join(composed)
+
+        txt = discord.File(
+            io.BytesIO(body.encode("utf-8")),
+            filename=f"transcribe_{interaction.id}.txt")
+        if len(body) <= TRANSCRIBE_INLINE_MAX:
+            await interaction.channel.send(f"```\n{body}\n```", file=txt)
+        else:
+            await interaction.channel.send(
+                "📝 ถอดเสียงเสร็จแล้ว (ข้อความยาว — ดูไฟล์แนบ)", file=txt)
+        await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
+        print(f"discord_say_bot: transcribe guild={interaction.guild.id} "
+              f"bytes={file.size} dur_s={duration:.1f} lines={len(lines)} "
+              f"stt_s={stt_s:.2f} model={WHISPER_MODEL} explicit_mood={mood}",
+              file=sys.stderr, flush=True)
+    finally:
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
 
 
 def main() -> int:

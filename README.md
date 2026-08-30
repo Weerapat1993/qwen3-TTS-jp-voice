@@ -26,7 +26,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
 | **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
 | **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
-| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>]` — joins your voice channel and speaks with the Liino voice via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood | `discord_say_bot.py` |
+| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>]` — joins your voice channel and speaks with the Liino voice via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood; `/transcribe` turns an audio upload into paste-ready text | `discord_say_bot.py` |
 
 ---
 
@@ -230,7 +230,7 @@ Important caveat: Qwen3-TTS is GPU-bound (Metal) — macOS always prioritizes GP
 
 ## Discord Bot (`discord_say_bot.py`)
 
-Optional Discord bot that adds an application slash command `/say`: pass either `text:<text>` (a single line) or `file:<x.txt>` (a `.txt` attachment for multi-line input), plus an optional `mood:<preset>`. The bot joins the voice channel you're currently in, generates speech with the cloned "Liino" voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic.
+Optional Discord bot that adds an application slash command `/say`: pass either `text:<text>` (a single line) or `file:<x.txt>` (a `.txt` attachment for multi-line input), plus an optional `mood:<preset>`. The bot joins the voice channel you're currently in, generates speech with the cloned "Liino" voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic. A second command, `/transcribe`, converts an uploaded audio file into paste-ready `/say` text (see below).
 
 The command tree is synced on `on_ready`. If `DISCORD_GUILD_ID` is set, `/say` is registered to just that guild and appears instantly; otherwise it's registered globally and can take up to ~1 hour to show up the first time.
 
@@ -291,6 +291,29 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
 | `DISCORD_GUILD_ID` | *(unset)* | If set, register `/say` to just this guild — it appears instantly. Unset = global registration (can take up to ~1 hour to appear the first time). |
 | `VC_IDLE_TIMEOUT_S` | `60` | Seconds to wait in an idle voice channel (empty queue, nothing playing) before disconnecting |
 | `SAY_SENTENCE_GAP_S` | `0.5` | Seconds of silence inserted after each sentence before the next queued line plays. `0` disables it. |
+| `TRANSCRIBE_WHISPER_MODEL` | `mlx-community/whisper-large-v3-turbo` | Whisper model repo used by `/transcribe` for speech-to-text. The first `/transcribe` after startup downloads ~1.6 GB to the Hugging Face cache. Set to `mlx-community/whisper-large-v3` for higher accuracy at the cost of speed and memory. |
+
+### `/transcribe` — audio file → paste-ready `/say` text
+
+Upload an `.mp3` or `.wav` and the bot transcribes it locally with Whisper
+(`mlx-whisper`, no cloud), tags each line with a mood emoji, and replies with a
+`.txt` attachment you can drop straight into `/say file:`.
+
+- **`/transcribe file:<audio> [mood:<preset>]`** — `file` must be `.mp3` or
+  `.wav`, ≤ 20 MB and ≤ 10 minutes; anything else is rejected with an ephemeral
+  error and nothing is posted.
+- Each Whisper segment becomes one line. A per-line keyword heuristic (Thai +
+  English) picks a mood and prefixes the matching emoji (`😄`, `😢`, `🤫`, …) —
+  the same emoji `/say` reads back as auto-mood. Lines with no match get no
+  prefix.
+- **`mood:<preset>`** overrides the mood for **every** line. `default` and
+  `long` have no emoji, so choosing them emits lines with no prefix.
+- The reply is always a `.txt` attachment. When the text is ≤ 1800 characters it
+  is also shown inline in a code block; longer transcripts are attachment-only.
+- This command never touches the TTS daemon — it works even when the daemon is
+  down.
+- First run downloads the Whisper model (~1.6 GB, see
+  `TRANSCRIBE_WHISPER_MODEL`). It loads once and stays in the bot process.
 
 ---
 
