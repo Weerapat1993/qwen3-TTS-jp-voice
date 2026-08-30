@@ -42,7 +42,7 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
 # reuse ของเดิมจาก qwen_clone_tts.py ทั้งหมด — ห้าม duplicate ค่า/logic
-from qwen_clone_tts import MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
+from qwen_clone_tts import LANG_CODES, MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
 from say_moods import MOOD_EMOJI, extract_mood, first_line_over_limit, parse_lines  # noqa: E402
 from stt_transcribe import WHISPER_MODEL, probe_duration, transcribe as run_stt  # noqa: E402
 from transcribe_mood import detect_mood  # noqa: E402
@@ -180,13 +180,18 @@ async def on_ready() -> None:
 @app_commands.describe(
     text="ข้อความบรรทัดเดียว (หลายบรรทัดให้ใช้ file:)",
     mood="โทนเสียง (ไม่เลือก = auto จาก emoji หรือปกติ)",
+    language="ภาษาที่โมเดลออกเสียง (ไม่เลือก = auto เดาจากข้อความ; ไทยใช้ auto)",
     file="ไฟล์ .txt สำหรับข้อความหลายบรรทัด (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB)")
-@app_commands.choices(mood=[
-    app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)])
+@app_commands.choices(
+    mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)],
+    language=[app_commands.Choice(name=c, value=c)
+              for c in LANG_CODES if c != "auto"])
 async def say(interaction: discord.Interaction, text: str | None = None,
               mood: str | None = None,
+              language: str | None = None,
               file: discord.Attachment | None = None) -> None:
     explicit_mood = mood  # ชื่อ preset ที่เลือกจาก dropdown หรือ None
+    lang = language or "auto"  # ไม่เลือก = auto (choice list ไม่มี auto)
 
     # ต้องระบุ text หรือ file อย่างใดอย่างหนึ่ง (XOR) — เช็คก่อน defer
     if (text is None) == (file is None):
@@ -288,7 +293,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
             tempfile.gettempdir(),
             f"qwen_say_{os.getpid()}_{int(time.time()*1000)}_{idx}.wav")
         ok = await asyncio.to_thread(
-            _try_daemon, spoken, wav_path, instruct, DEFAULT_VOICE, "wav")
+            _try_daemon, spoken, wav_path, instruct, DEFAULT_VOICE, "wav", lang)
         if not ok:
             for p in wav_paths:
                 try:
@@ -319,7 +324,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     await interaction.followup.send("✅ เข้าคิวแล้ว", ephemeral=True)
     print(f"discord_say_bot: queued say guild={interaction.guild.id} "
           f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
-          f"explicit_mood={explicit_mood} chars={total_chars}",
+          f"explicit_mood={explicit_mood} lang={lang} chars={total_chars}",
           file=sys.stderr, flush=True)
 
 
