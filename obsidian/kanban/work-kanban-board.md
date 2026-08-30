@@ -10,14 +10,13 @@ kanban-plugin: board
 
 ## PLAN
 
-- [TTS-1012](tasks/TTS-1012.md): Inline mood tag ([mood:xxx]) support for --stdin batch text
-
 ## INPROGRESS
 
 ## REVIEW
 
 ## DONE
 
+- [TTS-1012](tasks/TTS-1012.md): Inline mood tag ([mood:xxx]) support for --stdin batch text
 - [TTS-1011](tasks/TTS-1011.md): Remove MOOD_PRESETS["long"] / DEFAULT_INSTRUCT_LONG (superseded by per-voice set-default instruction)
 - [TTS-1010](tasks/TTS-1010.md): /say voice: + configurable default voice (/voice-clone set-default) + resolve_instruct() voice-default
 - [TTS-1009](tasks/TTS-1009.md): Discord slash command /voice-clone (create/list/edit/delete/test)

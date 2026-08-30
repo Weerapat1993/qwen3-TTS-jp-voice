@@ -8,8 +8,11 @@ Usage:
 
 Hermes command-provider mode:
     qwen_clone_tts.py --stdin <input_path> <output_path>
-    (อ่านข้อความจากไฟล์ UTF-8, ข้อความยาวเกิน 300 ตัวอักษรจะถูกแบ่งเป็น chunk
-     แล้วต่อเสียงเป็นไฟล์เดียว, ใช้เสียงโคลน Liino)
+    (อ่านข้อความจากไฟล์ UTF-8, ใช้เสียงโคลน Liino เสมอ. ข้อความเดี่ยว ๆ
+     (ไม่มี [mood:xxx] tag) ยังจำกัดที่ 300 ตัวอักษรเหมือนเดิม (--text ก็เช่นกัน).
+     ใส่ [mood:xxx] tag คั่นในเนื้อความเพื่อสลับโทนเสียงหลายท่อนในไฟล์เดียว —
+     กรณีนี้แต่ละท่อนถูก generate แยกแล้วต่อกันด้วย ffmpeg โดยอัตโนมัติ,
+     ไม่มีข้อจำกัดความยาวรวมทั้งไฟล์)
 """
 import argparse
 import contextlib
@@ -24,41 +27,45 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 VOICES_DIR = os.path.join(PROJ, "voices")
 MODEL_PATH = os.path.join(PROJ, "models", "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 MAX_CHARS = 300
-DEFAULT_INSTRUCT = "Cheerful, bright, playful young female voice. Clear and friendly, natural pace, not childish."
+DEFAULT_INSTRUCT = "Cheerful, bright, playful voice. Clear and friendly, natural pace, not childish."
 
 
 MOOD_PRESETS: dict[str, str] = {
     # ชื่อ mood -> instruct ที่ส่งให้โมเดล (ภาษาอังกฤษเพื่อความแม่นของโมเดล)
     "default":   DEFAULT_INSTRUCT,
-    "excited":   "Very excited and enthusiastic young female voice, "
+    "excited":   "Very excited and enthusiastic voice, "
                  "fast-paced and energetic, sparkling with joy.",
-    "sleepy":    "Soft, drowsy, relaxed young female voice. Slow pace, "
+    "sleepy":    "Soft, drowsy, relaxed voice. Slow pace, "
                  "gentle and low energy, like talking just before falling asleep.",
-    "surprised": "Surprised young female voice with a gasp of amazement, "
+    "surprised": "Surprised voice with a gasp of amazement, "
                  "wide-eyed and astonished, briefly raised pitch.",
-    "sad":       "Sad, melancholic young female voice. Slow, quiet and "
+    "sad":       "Sad, melancholic voice. Slow, quiet and "
                  "emotional, with a hint of sniffle, not overly dramatic.",
-    "angry":     "Angry, pouty young female voice. Sharp and huffy like "
+    "angry":     "Angry, pouty voice. Sharp and huffy like "
                  "playful irritation, not genuinely hostile.",
-    "whisper":   "Soft whispering young female voice. Very quiet, intimate "
+    "whisper":   "Soft whispering voice. Very quiet, intimate "
                  "and close to the microphone, sharing a secret.",
-    "gentle":    "Warm, gentle, soothing young female voice. Kind and calm, "
+    "gentle":    "Warm, gentle, soothing voice. Kind and calm, "
                  "comforting, moderate slow pace.",
-    "giggle":    "Playful young female voice mid-giggle, light and bouncy, "
+    "giggle":    "Playful voice mid-giggle, light and bouncy, "
                  "cheerful with a little laugh in the tone.",
-    "bored":     "Bored, unenthusiastic young female voice. Flat and droning, "
+    "bored":     "Bored, unenthusiastic voice. Flat and droning, "
                  "dragging slightly, with a sigh in the middle, low energy.",
     "storyteller": "Warm expressive storyteller voice, like narrating a "
                    "bedtime story. Rich intonation, gentle suspense, "
                    "slowing down at key moments, inviting the listener in.",
-    "pouty":     "Sulky, reluctant, mildly petulant young female voice. "
+    "pouty":     "Sulky, reluctant, mildly petulant voice. "
                  "Clipped and flat, slightly dragging, not genuinely angry.",
-    "shy":       "Shy, bashful, hesitant young female voice. Soft and quiet, "
+    "shy":       "Shy, bashful, hesitant voice. Soft and quiet, "
                  "with small nervous pauses.",
-    "proud":     "Proud, pleased, self-assured young female voice. Warm and "
+    "proud":     "Proud, pleased, self-assured voice. Warm and "
                  "steady, chin-up confidence.",
-    "worried":   "Worried, anxious, uneasy young female voice. Slightly "
+    "worried":   "Worried, anxious, uneasy voice. Slightly "
                  "hurried and tense, with uneven breath.",
+    "scared":    "Scared, frightened voice. Shaky and breathless, "
+                 "quick pace, tense pitch with a slight tremble.",
+    "confused":  "Confused, puzzled voice. Hesitant, uneven pace, "
+                 "rising questioning intonation, slightly slow to process.",
 }
 
 
@@ -91,6 +98,12 @@ def resolve_instruct(mood: str | None, instruct: str | None,
     """เลือก instruct ตามลำดับ: mood > instruct (explicit) >
     voice_default (จาก <voice>.instruct.txt) > MOOD_PRESETS["default"]
 
+    mood ถูก compose เข้ากับ voice_default แทนที่จะทับทิ้ง (ถ้ามีทั้งคู่) —
+    voice_default เก็บ timbre/gender/character ของเสียงนั้น (คงที่ทุก mood),
+    MOOD_PRESETS เก็บแค่ trait ของอารมณ์ (ไม่ผูกเพศ/อายุ) ผลลัพธ์คือ
+    "<voice_default> <mood trait>" เช่น เสียงชาย + mood excited ไม่ได้ "young
+    female" ติดมาด้วย
+
     voice_default เป็น keyword param ท้ายพร้อม default None เพื่อ backward-compat
     กับผู้เรียกเดิมที่ส่งแค่ 2 args (Hermes/CLI/tune_voice.py)
     """
@@ -99,7 +112,10 @@ def resolve_instruct(mood: str | None, instruct: str | None,
         if m not in MOOD_PRESETS:
             raise ValueError(
                 f"unknown mood '{m}' — choices: {', '.join(sorted(MOOD_PRESETS))}")
-        return MOOD_PRESETS[m]
+        mood_text = MOOD_PRESETS[m]
+        if voice_default:
+            return f"{voice_default} {mood_text}"
+        return mood_text
     if instruct:
         return instruct
     if voice_default:
@@ -143,6 +159,38 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS) -> list[str]:
     return chunks
 
 
+_MOOD_TAG_RE = re.compile(r"\[mood:(\w+)\]")
+
+
+def split_mood_segments(text: str) -> list[tuple[str | None, str]]:
+    """แบ่งข้อความตาม [mood:xxx] tag คืน list ของ (mood_key, text_segment)
+
+    mood_key เป็น None สำหรับเนื้อความก่อน tag แรก (ถ้ามี), lowercase เสมอ
+    (ตรงกับ resolve_instruct() ที่ .lower() mood ก่อนเทียบ MOOD_PRESETS)
+    ข้าม segment ที่ว่างเปล่าหลัง strip (เช่น tag ติดกันไม่มีเนื้อความคั่น)
+    raise ValueError รวมทุก mood key ที่ไม่รู้จักในครั้งเดียว ก่อนคืนค่าใด ๆ
+    (fail-fast — validate ทั้งไฟล์ก่อนเริ่ม generate ชิ้นแรก)
+    """
+    raw_tags = [m.lower() for m in _MOOD_TAG_RE.findall(text)]
+    unknown = sorted(set(t for t in raw_tags if t not in MOOD_PRESETS))
+    if unknown:
+        raise ValueError(
+            f"unknown mood(s) in --stdin tag: {', '.join(unknown)} — "
+            f"choices: {', '.join(sorted(MOOD_PRESETS))}")
+
+    parts = _MOOD_TAG_RE.split(text)
+    segments: list[tuple[str | None, str]] = []
+    pre = parts[0].strip()
+    if pre:
+        segments.append((None, pre))
+    for i in range(1, len(parts), 2):
+        key = parts[i].lower()
+        seg_text = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        if seg_text:
+            segments.append((key, seg_text))
+    return segments
+
+
 SOCK_PATH = "/tmp/qwen_tts_daemon.sock"
 DAEMON_TIMEOUT_S = 600.0        # รอผล generation นานสุด 10 นาที
 DAEMON_CONNECT_TIMEOUT_S = 5.0  # connect socket ต้องเร็ว
@@ -150,8 +198,10 @@ DAEMON_CONNECT_TIMEOUT_S = 5.0  # connect socket ต้องเร็ว
 
 def _try_daemon(text: str, out_path: str, instruct: str | None,
                 voice: str = "Liino", fmt: str = "wav",
-                lang: str = "auto") -> bool:
-    """ส่งงานผ่าน tts_daemon ถ้ารันอยู่ — คืน False ถ้า daemon ไม่พร้อม"""
+                lang: str = "auto", quiet: bool = False) -> bool:
+    """ส่งงานผ่าน tts_daemon ถ้ารันอยู่ — คืน False ถ้า daemon ไม่พร้อม
+    quiet=True ไม่ print OK/TIMING (ใช้เมื่อเป็นแค่ part หนึ่งของ multi-job
+    dispatch ใน _run_multi() — ผลลัพธ์สุดท้ายที่ print คือหลัง concat เสร็จ)"""
     import json as _json
     import socket as _socket
     if not os.path.exists(SOCK_PATH):
@@ -181,12 +231,13 @@ def _try_daemon(text: str, out_path: str, instruct: str | None,
     if not resp.get("ok"):
         print(f"ERROR: daemon failed: {resp.get('error')}", file=sys.stderr)
         return False
-    tag = " (cached)" if resp.get("cached") else ""
-    print(f"OK {resp['out_path']}")
-    qw = resp.get("queue_wait_s")
-    qw_s = f" queue_wait={qw:.2f}s" if isinstance(qw, (int, float)) else ""
-    print(f"TIMING via daemon gen={resp.get('gen_s', 0):.2f}s{qw_s}{tag}",
-          file=sys.stderr)
+    if not quiet:
+        tag = " (cached)" if resp.get("cached") else ""
+        print(f"OK {resp['out_path']}")
+        qw = resp.get("queue_wait_s")
+        qw_s = f" queue_wait={qw:.2f}s" if isinstance(qw, (int, float)) else ""
+        print(f"TIMING via daemon gen={resp.get('gen_s', 0):.2f}s{qw_s}{tag}",
+              file=sys.stderr)
     return True
 
 
@@ -221,18 +272,17 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
                    fmt="mp3" if mp3 else "wav", lang=lang):
         return 0
 
+    if len(text) > MAX_CHARS:
+        print(f"ERROR: text is {len(text)} chars — max is {MAX_CHARS} "
+              f"(use multiple [mood:xxx] segments via --stdin to split "
+              f"longer text)", file=sys.stderr)
+        return 1
+
     ref_text = None
     txt_path = os.path.join(VOICES_DIR, f"{voice}.txt")
     if os.path.exists(txt_path):
         with open(txt_path, "r", encoding="utf-8") as f:
             ref_text = f.read().strip()
-
-    chunks = chunk_text(text)
-    if len(text) > MAX_CHARS:
-        print(f"ERROR: text is {len(text)} chars — max is {MAX_CHARS} "
-              f"(long-text chunking is disabled)", file=sys.stderr)
-        return 1
-    multi = False
 
     t0 = time.time()
     from mlx_audio.tts.utils import load_model
@@ -242,76 +292,24 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
     load_s = time.time() - t0
 
     t1 = time.time()
-    if multi:
-        # สร้างเสียงทีละ chunk แล้ว concat ด้วย ffmpeg เป็นไฟล์เดียว
-        import shutil
-        import subprocess
-        if shutil.which("ffmpeg") is None:
-            print("ERROR: ffmpeg not found for concat", file=sys.stderr)
+    generate_audio(model=model, text=text, ref_audio=ref_audio,
+                   ref_text=ref_text, instruct=instruct, lang_code=lang,
+                   output_path=out_path)
+    # หาไฟล์ที่ mlx_audio เขียนจริง (บางครั้งต่อท้ายเลขนับ)
+    if os.path.isdir(out_path):
+        cands = sorted(
+            (os.path.join(out_path, f) for f in os.listdir(out_path)
+             if f.endswith((".wav", ".mp3"))),
+            key=os.path.getmtime)
+        if not cands:
+            print("ERROR: no audio produced", file=sys.stderr)
             return 1
-        tmpdir = tempfile.mkdtemp(prefix="qwen_clone_chunks_")
-        part_paths: list[str] = []
-        try:
-            for i, chunk in enumerate(chunks):
-                part = os.path.join(tmpdir, f"part_{i:03d}.wav")
-                # suppress tqdm progress bars จาก mlx_audio ในลูป
-                with contextlib.redirect_stderr(io.StringIO()), \
-                        contextlib.redirect_stdout(io.StringIO()):
-                    generate_audio(model=model, text=chunk,
-                                   ref_audio=ref_audio, ref_text=ref_text,
-                                   instruct=instruct, lang_code=lang,
-                                   output_path=part)
-                if os.path.isdir(part):
-                    cands = sorted(
-                        (os.path.join(part, f) for f in os.listdir(part)
-                         if f.endswith((".wav", ".mp3"))),
-                        key=os.path.getmtime)
-                    if not cands:
-                        print(f"ERROR: no audio for chunk {i}",
-                              file=sys.stderr)
-                        return 1
-                    part = cands[-1]
-                elif not os.path.exists(part):
-                    print(f"ERROR: chunk {i} output missing", file=sys.stderr)
-                    return 1
-                part_paths.append(part)
-            list_file = os.path.join(tmpdir, "list.txt")
-            with open(list_file, "w", encoding="utf-8") as f:
-                for p in part_paths:
-                    f.write(f"file '{p}'\n")
-            final_out = out_path
-            os.makedirs(os.path.dirname(final_out) or ".", exist_ok=True)
-            r = subprocess.run(
-                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                 "-f", "concat", "-safe", "0", "-i", list_file,
-                 "-ar", "24000", "-ac", "1", final_out],
-                capture_output=True, text=True)
-            if r.returncode != 0 or not os.path.exists(final_out):
-                print(f"ERROR: ffmpeg concat failed: {r.stderr}",
-                      file=sys.stderr)
-                return 1
-            final = final_out
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        final = cands[-1]
+    elif os.path.exists(out_path):
+        final = out_path
     else:
-        generate_audio(model=model, text=text, ref_audio=ref_audio,
-                       ref_text=ref_text, instruct=instruct, lang_code=lang,
-                       output_path=out_path)
-        # หาไฟล์ที่ mlx_audio เขียนจริง (บางครั้งต่อท้ายเลขนับ)
-        if os.path.isdir(out_path):
-            cands = sorted(
-                (os.path.join(out_path, f) for f in os.listdir(out_path)
-                 if f.endswith((".wav", ".mp3"))),
-                key=os.path.getmtime)
-            if not cands:
-                print("ERROR: no audio produced", file=sys.stderr)
-                return 1
-            final = cands[-1]
-        elif os.path.exists(out_path):
-            final = out_path
-        else:
-            print("ERROR: output missing", file=sys.stderr)
-            return 1
+        print("ERROR: output missing", file=sys.stderr)
+        return 1
 
     gen_s = time.time() - t1
 
@@ -321,6 +319,118 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
 
     print(f"OK {final_out}")
     print(f"TIMING load={load_s:.1f}s gen={gen_s:.1f}s", file=sys.stderr)
+    return 0
+
+
+def _run_multi(voice: str, segments: list[tuple[str | None, str]],
+               voice_default: str | None, out_path: str,
+               mp3: bool = False, lang: str = "auto",
+               mood: str | None = None) -> int:
+    """generate เสียงจากหลาย mood segment (2 ขึ้นไป) แล้ว concat เป็นไฟล์เดียว
+    ด้วย ffmpeg — ใช้เมื่อ --stdin มี [mood:xxx] tag ทำให้แบ่งได้มากกว่า 1 segment
+    แต่ละ segment ถูก chunk_text() ต่ออีกชั้นถ้ายาวเกิน MAX_CHARS
+    job ใดล้มเหลว -> ทั้งรัน fail ทันที ไม่มีการเล่นเสียงบางส่วน
+    segment ที่ไม่มี tag (mood_key=None) ยัง fallback ไปตาม priority เดิม
+    (mood flag ของ --stdin > per-voice default) เหมือน single-segment path"""
+    t_start = time.time()
+
+    def _fail(msg: str, code: int) -> int:
+        print(f"ERROR: {msg}", file=sys.stderr)
+        print(f"TIMING failed after {time.time() - t_start:.1f}s",
+              file=sys.stderr)
+        return code
+
+    ref_audio = os.path.join(VOICES_DIR, f"{voice}.wav")
+    if not os.path.exists(ref_audio):
+        return _fail(f"ref voice not found: {ref_audio}", 1)
+
+    jobs: list[tuple[str | None, str]] = []
+    for mood_key, seg_text in segments:
+        try:
+            instruct = resolve_instruct(mood_key or mood, None, voice_default)
+        except ValueError as e:
+            return _fail(str(e), 2)
+        for chunk in chunk_text(seg_text):
+            jobs.append((instruct, chunk))
+    if not jobs:
+        return _fail("no text content after mood-tag parsing", 1)
+
+    import shutil
+    import subprocess
+    if shutil.which("ffmpeg") is None:
+        return _fail("ffmpeg not found for concat", 1)
+
+    tmpdir = tempfile.mkdtemp(prefix="qwen_clone_chunks_")
+    part_paths: list[str] = []
+    load_s = 0.0
+    try:
+        part0 = os.path.join(tmpdir, "part_000.wav")
+        instruct0, text0 = jobs[0]
+        t0 = time.time()
+        use_daemon = _try_daemon(text0, part0, instruct0, voice, fmt="wav",
+                                 lang=lang, quiet=True)
+        t1 = time.time()
+        if use_daemon:
+            part_paths.append(part0)
+            for i, (instruct, text) in enumerate(jobs[1:], start=1):
+                part = os.path.join(tmpdir, f"part_{i:03d}.wav")
+                if not _try_daemon(text, part, instruct, voice, fmt="wav",
+                                   lang=lang, quiet=True):
+                    return _fail(f"daemon failed on job {i} of {len(jobs)}", 1)
+                part_paths.append(part)
+        else:
+            from mlx_audio.tts.utils import load_model
+            from mlx_audio.tts.generate import generate_audio
+            ref_text = None
+            txt_path = os.path.join(VOICES_DIR, f"{voice}.txt")
+            if os.path.exists(txt_path):
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    ref_text = f.read().strip()
+            model = load_model(MODEL_PATH)
+            load_s = time.time() - t0
+            t1 = time.time()
+            for i, (instruct, text) in enumerate(jobs):
+                part = os.path.join(tmpdir, f"part_{i:03d}.wav")
+                with contextlib.redirect_stderr(io.StringIO()), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    generate_audio(model=model, text=text,
+                                   ref_audio=ref_audio, ref_text=ref_text,
+                                   instruct=instruct, lang_code=lang,
+                                   output_path=part)
+                if os.path.isdir(part):
+                    cands = sorted(
+                        (os.path.join(part, f) for f in os.listdir(part)
+                         if f.endswith((".wav", ".mp3"))),
+                        key=os.path.getmtime)
+                    if not cands:
+                        return _fail(f"no audio for job {i}", 1)
+                    part = cands[-1]
+                elif not os.path.exists(part):
+                    return _fail(f"job {i} output missing", 1)
+                part_paths.append(part)
+
+        list_file = os.path.join(tmpdir, "list.txt")
+        with open(list_file, "w", encoding="utf-8") as f:
+            for p in part_paths:
+                f.write(f"file '{p}'\n")
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "concat", "-safe", "0", "-i", list_file,
+             "-ar", "24000", "-ac", "1", out_path],
+            capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(out_path):
+            return _fail(f"ffmpeg concat failed: {r.stderr}", 1)
+        gen_s = time.time() - t1
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    final_out = out_path
+    if mp3:
+        final_out = _convert_to_mp3(out_path)
+    print(f"OK {final_out}")
+    print(f"TIMING load={load_s:.1f}s gen={gen_s:.1f}s jobs={len(jobs)}",
+          file=sys.stderr)
     return 0
 
 
@@ -356,13 +466,29 @@ def main() -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
         from voice_store import read_instruction
+        voice_default = read_instruction("Liino")
         try:
-            instruct = resolve_instruct(mood, None, read_instruction("Liino"))
+            segments = split_mood_segments(text)
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
-        return _run("Liino", text, out_path, instruct,
-                    mp3="--mp3" in rest, lang=lang)
+        if not segments:
+            print("ERROR: no text content after mood-tag parsing",
+                  file=sys.stderr)
+            return 1
+        if len(segments) == 1:
+            # ไม่มี [mood:xxx] tag เลย (mood_key=None -> ใช้ --mood flag เดิม),
+            # หรือมี tag เดียวคลุมทั้งไฟล์ -> job เดียว ไม่ต้อง concat
+            mood_key, seg_text = segments[0]
+            try:
+                instruct = resolve_instruct(mood_key or mood, None, voice_default)
+            except ValueError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 2
+            return _run("Liino", seg_text, out_path, instruct,
+                        mp3="--mp3" in rest, lang=lang)
+        return _run_multi("Liino", segments, voice_default, out_path,
+                          mp3="--mp3" in rest, lang=lang, mood=mood)
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--text", required=True, help="ข้อความที่จะให้อ่าน")

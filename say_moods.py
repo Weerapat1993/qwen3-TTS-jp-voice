@@ -6,6 +6,8 @@
 ไม่มี side-effect
 """
 
+import re
+
 # emoji ตัวเดียว -> ชื่อ mood preset ใน MOOD_PRESETS ของ qwen_clone_tts.py
 # map เฉพาะ mood ที่มี emoji สื่อความหมายชัด — ไม่ map default/long
 EMOJI_MOOD: dict[str, str] = {
@@ -23,6 +25,8 @@ EMOJI_MOOD: dict[str, str] = {
     "😳": "shy", "🫣": "shy",
     "😌": "proud", "😏": "proud",
     "😟": "worried", "😧": "worried", "😦": "worried",
+    "😨": "scared", "😰": "scared", "🙀": "scared",
+    "😕": "confused", "🤔": "confused", "😵": "confused",
 }
 
 
@@ -44,6 +48,8 @@ MOOD_EMOJI: dict[str, str] = {
     "shy": "😳",
     "proud": "😌",
     "worried": "😟",
+    "scared": "😨",
+    "confused": "😕",
 }
 
 
@@ -76,17 +82,37 @@ def first_line_over_limit(lines, max_chars: int) -> tuple[int, int] | None:
     return None
 
 
-def extract_mood(line: str) -> tuple[str, str | None]:
-    """หา emoji ตัวแรกที่ map ได้ใน line -> คืน (ข้อความที่ตัด emoji นั้นออก, mood)
+# [mood:xxx] tag นำหน้าบรรทัด — รูปแบบเดียวกับ qwen_clone_tts.py --stdin
+# (ผู้ใช้บางคนวางไฟล์ที่เตรียมไว้สำหรับ --stdin เข้า /say ตรง ๆ) ต้องตัดออก
+# เสมอก่อนพูด ไม่งั้น TTS จะอ่านคำว่า "mood" ทับเนื้อความจริง
+_MOOD_TAG_RE = re.compile(r"^\[mood:(\w+)\]\s*")
 
-    - scan ทีละ character หา key แรกที่อยู่ใน EMOJI_MOOD (emoji ในตารางนี้เป็น
-      codepoint เดี่ยวทั้งหมด ไม่มี ZWJ sequence จึง iterate ทีละ char พอ)
-    - ตัด emoji ตัวนั้นออก 1 ครั้ง แล้ว strip ช่องว่างหัวท้าย
-    - ไม่เจอ emoji ที่ map ได้ -> คืน (line.strip(), None); emoji อื่นไม่แตะ
+
+def extract_mood(line: str) -> tuple[str, str | None]:
+    """หา [mood:xxx] tag นำหน้า หรือ emoji ตัวแรกที่ map ได้ใน line
+    -> คืน (ข้อความที่ตัด tag/emoji นั้นออก, mood)
+
+    ลำดับ:
+    1. เช็ค [mood:xxx] tag ที่ต้นบรรทัดก่อน — ตัดออกจากข้อความเสมอไม่ว่าชื่อ mood
+       จะรู้จักหรือไม่ (กัน literal tag หลุดไปพูด); ถ้าชื่อไม่อยู่ใน MOOD_EMOJI
+       ถือว่าไม่รู้จัก mood จาก tag นี้ (mood=None) แล้วไปต่อ step 2 ด้วยข้อความ
+       ที่เหลือ (เผื่อมี emoji ต่อท้าย)
+    2. scan ทีละ character หา key แรกที่อยู่ใน EMOJI_MOOD (emoji ในตารางนี้เป็น
+       codepoint เดี่ยวทั้งหมด ไม่มี ZWJ sequence จึง iterate ทีละ char พอ)
+       ตัด emoji ตัวนั้นออก 1 ครั้ง แล้ว strip ช่องว่างหัวท้าย
+    - ไม่เจอทั้ง tag และ emoji ที่ map ได้ -> คืน (line.strip(), None)
     """
+    tag_mood = None
+    m = _MOOD_TAG_RE.match(line)
+    if m:
+        raw = m.group(1).lower()
+        tag_mood = raw if raw in MOOD_EMOJI else None
+        line = line[m.end():]
+
     for i, ch in enumerate(line):
         mood = EMOJI_MOOD.get(ch)
         if mood is not None:
             stripped = (line[:i] + line[i + 1:]).strip()
-            return stripped, mood
-    return line.strip(), None
+            return stripped, tag_mood or mood
+
+    return line.strip(), tag_mood

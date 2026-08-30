@@ -18,7 +18,7 @@ from qwen_clone_tts import DEFAULT_INSTRUCT, MODEL_PATH, VOICES_DIR
 
 INSTRUCTS = {
     "default": DEFAULT_INSTRUCT,
-    "short": "Cheerful, bright, playful young female voice. Clear and friendly, natural pace, not childish.",
+    "short": "Cheerful, bright, playful voice. Clear and friendly, natural pace, not childish.",
     "th_clear": ("A youthful female anime character voice. Clear, bright, soft, feminine timbre, "
                  "slightly high pitch. Speak each word crisply and clearly at a moderate pace, "
                  "natural lively intonation, friendly and energetic but not exaggerated."),

@@ -16,7 +16,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **Voice Design** | Create a new voice from a text description (e.g. "deep narrator") | `main.py` (menu) |
 | **Custom Voice** | 9 built-in preset voices with emotion + speed control | `main.py` (menu) |
 | **Scriptable CLI** | Generate audio from a single flag-based command, no prompts | `qwen_clone_tts.py --text ...` |
-| **Stdin/file mode** | Read text from a file, auto-chunk long text, output one audio file | `qwen_clone_tts.py --stdin <in> <out>` |
+| **Stdin/file mode** | Read text from a file, switch mood mid-file via `[mood:xxx]` tags, output one audio file | `qwen_clone_tts.py --stdin <in> <out>` |
 | **WAV or MP3 output** | Generate MP3 directly via ffmpeg (`libmp3lame`) instead of WAV | `--mp3` flag |
 | **Background daemon** | Load the model once, serve requests over a Unix socket — skips the ~3-10s model load on every call | `tts_daemon.py` |
 | **FIFO job queue** | Daemon serializes concurrent requests; in-flight jobs are never cancelled | `tts_daemon.py` |
@@ -161,14 +161,18 @@ python qwen_clone_tts.py \
 | `--mood NAME` | no | Named tone preset (see mood list below) |
 | `--lang CODE` | no (default `auto`) | Output language for the TTS model. `auto` lets the model infer it from the text. Valid: `auto, chinese, english, french, german, italian, japanese, korean, portuguese, russian, spanish`. **Thai is not a model language — Thai text uses `auto`.** |
 
-**File / stdin mode** (reads text from a file, auto-chunks it, always uses the `Liino` voice):
+**File / stdin mode** (reads text from a file, supports `[mood:xxx]` tags to switch mood mid-file, always uses the `Liino` voice):
 
 ```bash
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.mp3 --mp3
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav --mood excited
 python qwen_clone_tts.py --stdin path/to/input.ja.txt out.wav --lang japanese
+
+# input.txt may contain: [mood:excited]Hi there! [mood:sleepy]So tired now...
 ```
+
+Untagged text is still capped at 300 chars (same limit as `--text`). Insert one or more `[mood:xxx]` tags (`xxx` must be a key from the mood list below) to switch tone mid-file — each tagged segment is generated separately and stitched together with `ffmpeg`, with no overall length limit. An unknown mood key in a tag fails the whole file with `ERROR: unknown mood(s) in --stdin tag: ...` before any audio is generated.
 
 Exit code `0` = success (`OK <path>` printed to stdout). Non-zero = failure (`ERROR: ...` printed to stderr).
 
@@ -277,7 +281,7 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
 ### Behavior
 
 - **`/say text:<text>`** — joins the voice channel of the command user and speaks `<text>` with the current default voice (or `voice:<name>` if given). `text` is meant for a single line (Discord desktop can't type a newline in a slash field).
-- **`voice:<name>`** — override the voice for this call only (autocomplete lists names from `voices/`, filtered as you type — dynamic rather than a static dropdown, so it still works past Discord's 25-choice limit). An unknown/unsanitizable name is rejected with an ephemeral error before anything is queued. Leave it unset to use the default voice set via `/voice-clone set-default` (falls back to `Liino` if none was ever set). If the chosen voice has a stored `instruct.txt`, it's used as the instruct fallback (after `mood`/explicit instruct, before the built-in default — see `resolve_instruct()`).
+- **`voice:<name>`** — override the voice for this call only (autocomplete lists names from `voices/`, filtered as you type — dynamic rather than a static dropdown, so it still works past Discord's 25-choice limit). An unknown/unsanitizable name is rejected with an ephemeral error before anything is queued. Leave it unset to use the default voice set via `/voice-clone set-default` (falls back to `Liino` if none was ever set). If the chosen voice has a stored `instruct.txt`, it's used as the instruct fallback when no `mood`/explicit instruct is given, and it's also *composed* onto `mood:<preset>` (voice text first, mood trait appended) so a voice's gender/timbre stays fixed while the mood trait still applies — before the built-in default (see `resolve_instruct()`).
 - **`/say file:<x.txt>`** — upload a UTF-8 `.txt` attachment (≤ 100 KB) for multi-line input: one line per sentence, real newlines in the file. Same pipeline as `text` (emoji auto-mood, per-line limit, etc.).
 - **You must supply exactly one of `text:` or `file:`** — neither or both is rejected with an ephemeral error before anything is queued. A `file:` that isn't `.txt`, is over 100 KB, or isn't valid UTF-8 is rejected the same way.
 - **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, `pouty`, `shy`, `proud`, `worried`, etc.), picked from the `mood` choice dropdown. Works with both `text:` and `file:`.
@@ -302,6 +306,8 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
   | `shy` | 😳 🫣 |
   | `proud` | 😌 😏 |
   | `worried` | 😟 😧 😦 |
+  | `scared` | 😨 😰 🙀 |
+  | `confused` | 😕 🤔 😵 |
 
 - The `MAX_CHARS` (300) limit applies **per line** (measured after emoji removal and trimming), matching the daemon's own per-request limit. If any single line is over 300 chars, the whole message is rejected immediately with a readable error naming the offending line number, and nothing is queued. The combined length of all lines is not limited.
 - **Atomic batch** — if any line fails to generate (daemon down mid-batch), no line is played and the temp files are cleaned up.
@@ -403,7 +409,7 @@ omitted.
 | `mlx_audio not found` | Run `source .venv/bin/activate` first |
 | `Model not found` | Check model folder names match exactly |
 | Audio won't play | Check macOS sound output settings |
-| `text is N chars — max is 300` | Split the text yourself; long-text auto-chunking is disabled |
+| `text is N chars — max is 300` | Split with `[mood:xxx]` tags for `--stdin`, or split the text yourself for `--text` |
 | Daemon not picked up by client | Check `TTS_DAEMON_SOCK` matches on both daemon and client; confirm the daemon process is running |
 
 ---

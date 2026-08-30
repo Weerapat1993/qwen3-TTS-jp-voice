@@ -53,7 +53,7 @@ from voice_store import VoiceStoreError  # noqa: E402
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
 VC_IDLE_TIMEOUT_S = float(os.environ.get("VC_IDLE_TIMEOUT_S", "60"))
-SAY_SENTENCE_GAP_S = float(os.environ.get("SAY_SENTENCE_GAP_S", "0.5"))
+SAY_SENTENCE_GAP_S = float(os.environ.get("SAY_SENTENCE_GAP_S", "1"))
 
 # /transcribe limits (TTS-1005)
 TRANSCRIBE_MAX_BYTES = 20 * 1024 * 1024
