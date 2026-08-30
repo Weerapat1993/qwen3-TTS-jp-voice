@@ -8,7 +8,8 @@ import pytest
 
 import qwen_clone_tts
 from qwen_clone_tts import (LANG_CODES, MODEL_PATH, MOOD_PRESETS,
-                            resolve_instruct, resolve_lang, _try_daemon)
+                            resolve_instruct, resolve_lang, _try_daemon,
+                            split_mood_segments)
 
 
 def test_resolve_lang_none_is_auto():
@@ -67,6 +68,53 @@ def test_resolve_instruct_falls_back_to_mood_preset_default():
 def test_resolve_instruct_unknown_mood_raises():
     with pytest.raises(ValueError):
         resolve_instruct("nope", None, "voice default")
+
+
+def test_split_mood_segments_no_tag_returns_single_none_segment():
+    assert split_mood_segments("Hello world") == [(None, "Hello world")]
+
+
+def test_split_mood_segments_single_tag_covers_whole_text():
+    assert split_mood_segments("[mood:excited]Hello world") == \
+        [("excited", "Hello world")]
+
+
+def test_split_mood_segments_leading_text_then_tag():
+    result = split_mood_segments("Hello [mood:excited] world")
+    assert result == [(None, "Hello"), ("excited", "world")]
+
+
+def test_split_mood_segments_multiple_tags_interleaved():
+    text = "[mood:excited]Hi![mood:sleepy]So tired..."
+    assert split_mood_segments(text) == \
+        [("excited", "Hi!"), ("sleepy", "So tired...")]
+
+
+def test_split_mood_segments_drops_empty_segment_between_adjacent_tags():
+    text = "[mood:excited][mood:sleepy]only this"
+    assert split_mood_segments(text) == [("sleepy", "only this")]
+
+
+def test_split_mood_segments_drops_whitespace_only_segment():
+    text = "[mood:excited]   \n  [mood:sleepy]only this"
+    assert split_mood_segments(text) == [("sleepy", "only this")]
+
+
+def test_split_mood_segments_lowercases_mood_key():
+    assert split_mood_segments("[mood:EXCITED]hi") == [("excited", "hi")]
+
+
+def test_split_mood_segments_unknown_mood_raises():
+    with pytest.raises(ValueError):
+        split_mood_segments("[mood:exicted]Hello")
+
+
+def test_split_mood_segments_reports_all_unknown_moods_at_once():
+    with pytest.raises(ValueError) as exc_info:
+        split_mood_segments("[mood:foo]a[mood:bar]b")
+    msg = str(exc_info.value)
+    assert "foo" in msg
+    assert "bar" in msg
 
 
 class _FakeSock:

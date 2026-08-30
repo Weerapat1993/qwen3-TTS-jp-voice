@@ -143,6 +143,38 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS) -> list[str]:
     return chunks
 
 
+_MOOD_TAG_RE = re.compile(r"\[mood:(\w+)\]")
+
+
+def split_mood_segments(text: str) -> list[tuple[str | None, str]]:
+    """แบ่งข้อความตาม [mood:xxx] tag คืน list ของ (mood_key, text_segment)
+
+    mood_key เป็น None สำหรับเนื้อความก่อน tag แรก (ถ้ามี), lowercase เสมอ
+    (ตรงกับ resolve_instruct() ที่ .lower() mood ก่อนเทียบ MOOD_PRESETS)
+    ข้าม segment ที่ว่างเปล่าหลัง strip (เช่น tag ติดกันไม่มีเนื้อความคั่น)
+    raise ValueError รวมทุก mood key ที่ไม่รู้จักในครั้งเดียว ก่อนคืนค่าใด ๆ
+    (fail-fast — validate ทั้งไฟล์ก่อนเริ่ม generate ชิ้นแรก)
+    """
+    raw_tags = [m.lower() for m in _MOOD_TAG_RE.findall(text)]
+    unknown = sorted(set(t for t in raw_tags if t not in MOOD_PRESETS))
+    if unknown:
+        raise ValueError(
+            f"unknown mood(s) in --stdin tag: {', '.join(unknown)} — "
+            f"choices: {', '.join(sorted(MOOD_PRESETS))}")
+
+    parts = _MOOD_TAG_RE.split(text)
+    segments: list[tuple[str | None, str]] = []
+    pre = parts[0].strip()
+    if pre:
+        segments.append((None, pre))
+    for i in range(1, len(parts), 2):
+        key = parts[i].lower()
+        seg_text = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        if seg_text:
+            segments.append((key, seg_text))
+    return segments
+
+
 SOCK_PATH = "/tmp/qwen_tts_daemon.sock"
 DAEMON_TIMEOUT_S = 600.0        # รอผล generation นานสุด 10 นาที
 DAEMON_CONNECT_TIMEOUT_S = 5.0  # connect socket ต้องเร็ว
