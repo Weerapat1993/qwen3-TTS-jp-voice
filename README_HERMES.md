@@ -40,6 +40,12 @@ Hermes (text_to_speech tool)
 - **ส่งข้อความผ่านไฟล์** (`--stdin input.txt`) ห้าม pipe ผ่าน `echo | python`
 - ความเร็ว: ~15–17 วินาที/ประโยคสั้น, memory peak ~6.7GB, RTF 0.57x
 - ผลลัพธ์เป็นไฟล์ `.wav` 24kHz mono Int16
+- **`--stdin` path hardcode `_run("Liino", ...)` เสมอ (ไม่มี `--voice` flag
+  ในโหมดนี้ด้วยซ้ำ) ไม่ตาม default voice ที่ตั้งผ่าน Discord `/voice-clone
+  set-default` (TTS-1010)** — ฝั่ง Discord bot เปลี่ยน default voice ได้เอง
+  แล้ว แต่ Hermes เป็น external consumer ที่พึ่ง behavior เดิม จึงตั้งใจ
+  ไม่ตามการเปลี่ยนแปลงนี้เงียบ ๆ; ถ้าจะเปลี่ยนเสียงของ Hermes ต้องแก้ literal
+  `"Liino"` ใน `--stdin` branch ของ `qwen_clone_tts.py:main()` เอง
 
 ---
 

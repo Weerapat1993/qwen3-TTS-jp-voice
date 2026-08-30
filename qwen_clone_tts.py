@@ -101,8 +101,15 @@ def resolve_lang(lang: str | None) -> str:
 
 
 def resolve_instruct(mood: str | None, instruct: str | None,
-                     instruct_long: bool) -> str | None:
-    """เลือก instruct: --mood มีลำดับความสำคัญก่อน --instruct / --instruct-long"""
+                     instruct_long: bool,
+                     voice_default: str | None = None) -> str | None:
+    """เลือก instruct ตามลำดับ: instruct_long > mood > instruct (explicit) >
+    voice_default (จาก <voice>.instruct.txt) > MOOD_PRESETS["default"]
+
+    voice_default เป็น keyword param ท้ายพร้อม default None เพื่อ backward-compat
+    กับผู้เรียกเดิมที่ส่งแค่ 3 args (Hermes/CLI/tune_voice.py) — ห้ามเปลี่ยน
+    positional order เดิม (TTS-1010)
+    """
     if instruct_long:
         return DEFAULT_INSTRUCT_LONG
     if mood:
@@ -113,6 +120,8 @@ def resolve_instruct(mood: str | None, instruct: str | None,
         return MOOD_PRESETS[m]
     if instruct:
         return instruct
+    if voice_default:
+        return voice_default
     return MOOD_PRESETS["default"]
 
 
@@ -394,9 +403,14 @@ def main() -> int:
     args = ap.parse_args()
     out_path = args.out or os.path.join(
         tempfile.gettempdir(), "qwen_clone_out.wav")
+    # อ่าน per-voice instruction (<voice>.instruct.txt) เป็น fallback ก่อน
+    # MOOD_PRESETS["default"] — import แบบ lazy กัน circular import
+    # (voice_store import VOICES_DIR จากโมดูลนี้ตอน module load)
+    from voice_store import read_instruction
+    voice_default = read_instruction(args.voice)
     try:
         instruct = resolve_instruct(args.mood, args.instruct,
-                                    args.instruct_long)
+                                    args.instruct_long, voice_default)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

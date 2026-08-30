@@ -4,9 +4,10 @@
 `text` = ข้อความบรรทัดเดียว, `file` = `.txt` attachment สำหรับข้อความหลายบรรทัด
 (ต้องระบุอย่างใดอย่างหนึ่ง — XOR)
 
-ให้บอทเข้า voice channel ที่ผู้สั่งอยู่ สร้างเสียงด้วย qwen3-tts (เสียงโคลน Liino)
-ผ่าน tts_daemon fast path เท่านั้น (ไม่ fallback โหลดโมเดลเองถ้า daemon ล่ม —
-ดู Decision ใน obsidian/kanban/tasks/TTS-1001.md) แล้วเล่นในห้องตามคิวต่อ guild
+ให้บอทเข้า voice channel ที่ผู้สั่งอยู่ สร้างเสียงด้วย qwen3-tts (เสียงโคลน — ไม่ระบุ
+`voice:` = ใช้ default voice ที่ตั้งไว้ผ่าน `/voice-clone set-default`, fallback
+`Liino` ถ้ายังไม่เคยตั้ง) ผ่าน tts_daemon fast path เท่านั้น (ไม่ fallback โหลดโมเดลเอง
+ถ้า daemon ล่ม — ดู Decision ใน obsidian/kanban/tasks/TTS-1001.md) แล้วเล่นในห้องตามคิวต่อ guild
 
 Usage:
     .venv/bin/python discord_say_bot.py
@@ -53,8 +54,6 @@ DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
 VC_IDLE_TIMEOUT_S = float(os.environ.get("VC_IDLE_TIMEOUT_S", "60"))
 SAY_SENTENCE_GAP_S = float(os.environ.get("SAY_SENTENCE_GAP_S", "0.5"))
-
-DEFAULT_VOICE = "Liino"
 
 # /transcribe limits (TTS-1005)
 TRANSCRIBE_MAX_BYTES = 20 * 1024 * 1024
@@ -181,22 +180,36 @@ async def on_ready() -> None:
           file=sys.stderr, flush=True)
 
 
+async def _voice_autocomplete(
+        interaction: discord.Interaction,
+        current: str) -> list[app_commands.Choice[str]]:
+    """dynamic autocomplete แทน static Choice list — กันเกิน 25 รายการ (Discord
+    limit) เมื่อมีเสียงเยอะ; filter ด้วย substring ของ current"""
+    current = (current or "").strip().lower()
+    names = [v["name"] for v in voice_store.list_voices()]
+    matched = [n for n in names if current in n][:25]
+    return [app_commands.Choice(name=n, value=n) for n in matched]
+
+
 @tree.command(name="say",
-              description="ให้บอทพูดข้อความใน voice channel ด้วยเสียง Liino")
+              description="ให้บอทพูดข้อความใน voice channel ด้วยเสียงโคลน")
 @app_commands.guild_only()
 @app_commands.describe(
     text="ข้อความบรรทัดเดียว (หลายบรรทัดให้ใช้ file:)",
     mood="โทนเสียง (ไม่เลือก = auto จาก emoji หรือปกติ)",
     language="ภาษาที่โมเดลออกเสียง (ไม่เลือก = auto เดาจากข้อความ; ไทยใช้ auto)",
-    file="ไฟล์ .txt สำหรับข้อความหลายบรรทัด (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB)")
+    file="ไฟล์ .txt สำหรับข้อความหลายบรรทัด (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB)",
+    voice="เสียงที่จะใช้ (ไม่เลือก = default voice ที่ตั้งไว้ผ่าน /voice-clone set-default)")
 @app_commands.choices(
     mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)],
     language=[app_commands.Choice(name=c, value=c)
               for c in LANG_CODES if c != "auto"])
+@app_commands.autocomplete(voice=_voice_autocomplete)
 async def say(interaction: discord.Interaction, text: str | None = None,
               mood: str | None = None,
               language: str | None = None,
-              file: discord.Attachment | None = None) -> None:
+              file: discord.Attachment | None = None,
+              voice: str | None = None) -> None:
     explicit_mood = mood  # ชื่อ preset ที่เลือกจาก dropdown หรือ None
     lang = language or "auto"  # ไม่เลือก = auto (choice list ไม่มี auto)
 
@@ -206,6 +219,21 @@ async def say(interaction: discord.Interaction, text: str | None = None,
             "ใช้: `/say text:<ข้อความ>` (บรรทัดเดียว) หรือ `/say file:<x.txt>` "
             "(หลายบรรทัด) — เลือกอย่างใดอย่างหนึ่ง", ephemeral=True)
         return
+
+    # เลือกเสียง: ระบุ voice: ต้องมีอยู่จริง, ไม่ระบุ = default voice ปัจจุบัน
+    if voice is not None:
+        try:
+            voice_clean = voice_store.sanitize_name(voice)
+        except VoiceStoreError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        if not voice_store.voice_exists(voice_clean):
+            await interaction.response.send_message(
+                f"⚠️ ไม่พบเสียง `{voice_clean}`", ephemeral=True)
+            return
+    else:
+        voice_clean = voice_store.get_default_voice()
+    voice_instruct = voice_store.read_instruction(voice_clean)
 
     if file is not None:
         # type/size เช็คได้ก่อน download; .txt = content_type ขึ้นต้น text/ หรือ
@@ -276,7 +304,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     jobs_meta: list[tuple[str, str | None]] = []  # (spoken, instruct)
     for spoken, m in prepared:
         try:
-            instruct = resolve_instruct(m, None, False)
+            instruct = resolve_instruct(m, None, False, voice_instruct)
         except ValueError as e:
             await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
             return
@@ -300,7 +328,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
             tempfile.gettempdir(),
             f"qwen_say_{os.getpid()}_{int(time.time()*1000)}_{idx}.wav")
         ok = await asyncio.to_thread(
-            _try_daemon, spoken, wav_path, instruct, DEFAULT_VOICE, "wav", lang)
+            _try_daemon, spoken, wav_path, instruct, voice_clean, "wav", lang)
         if not ok:
             for p in wav_paths:
                 try:
@@ -331,7 +359,8 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     await interaction.followup.send("✅ เข้าคิวแล้ว", ephemeral=True)
     print(f"discord_say_bot: queued say guild={interaction.guild.id} "
           f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
-          f"explicit_mood={explicit_mood} lang={lang} chars={total_chars}",
+          f"explicit_mood={explicit_mood} lang={lang} chars={total_chars} "
+          f"voice={voice_clean}",
           file=sys.stderr, flush=True)
 
 
@@ -458,11 +487,13 @@ def _voices_summary() -> str:
     voices = voice_store.list_voices()
     if not voices:
         return "ยังไม่มีเสียงใน voices/"
+    default = voice_store.get_default_voice()
     rows = []
     for v in voices:
         tag = "" if v["has_transcript"] else " (ไม่มี transcript)"
         ins = f" — {v['instruction']}" if v["instruction"] else ""
-        rows.append(f"• {v['name']}{tag}{ins}")
+        mark = " (default)" if v["name"] == default else ""
+        rows.append(f"• {v['name']}{tag}{ins}{mark}")
     return "\n".join(rows)
 
 
@@ -471,6 +502,28 @@ async def voice_clone_list(interaction: discord.Interaction) -> None:
     body = _voices_summary().replace("```", "`​`​`")
     await interaction.response.send_message(
         f"🎙️ เสียงที่มี:\n```\n{body}\n```", ephemeral=True)
+
+
+@voice_clone.command(
+    name="set-default", description="ตั้งเสียงหลักที่ /say ใช้เมื่อไม่ระบุ voice:")
+@app_commands.describe(name="ชื่อเสียงที่จะตั้งเป็น default")
+async def voice_clone_set_default(interaction: discord.Interaction,
+                                  name: str) -> None:
+    try:
+        clean = voice_store.sanitize_name(name)
+    except VoiceStoreError as e:
+        await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    if not voice_store.voice_exists(clean):
+        await interaction.response.send_message(
+            f"⚠️ ไม่พบเสียง `{clean}`", ephemeral=True)
+        return
+    voice_store.set_default_voice(clean)
+    await interaction.response.send_message(
+        f"⭐ ตั้ง `{clean}` เป็น default voice แล้ว — `/say` ที่ไม่ระบุ `voice:` "
+        f"จะใช้เสียงนี้", ephemeral=True)
+    print(f"discord_say_bot: voice-clone set-default guild={interaction.guild.id} "
+          f"name={clean}", file=sys.stderr, flush=True)
 
 
 @voice_clone.command(
@@ -590,7 +643,7 @@ async def voice_clone_edit(interaction: discord.Interaction, name: str,
     if instruction is not None:
         if voice_store.is_reserved(clean):
             await interaction.response.send_message(
-                f"⚠️ แก้ instruction ของ `{clean}` (default voice) ไม่ได้",
+                f"⚠️ แก้ instruction ของ `{clean}` (reserved voice) ไม่ได้",
                 ephemeral=True)
             return
         voice_store.write_instruction(clean, instruction)
@@ -599,6 +652,11 @@ async def voice_clone_edit(interaction: discord.Interaction, name: str,
 
     final_name = clean
     if rename is not None:
+        if voice_store.is_protected(clean):
+            await interaction.response.send_message(
+                f"⚠️ `{clean}` เป็น default voice ปัจจุบัน — `/voice-clone "
+                f"set-default` ไปเสียงอื่นก่อนถึงจะ rename ได้", ephemeral=True)
+            return
         try:
             new_clean = voice_store.sanitize_name(rename)
             voice_store.rename_voice(clean, new_clean)
@@ -623,6 +681,11 @@ async def voice_clone_delete(interaction: discord.Interaction, name: str,
         clean = voice_store.sanitize_name(name)
     except VoiceStoreError as e:
         await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    if voice_store.is_protected(clean):
+        await interaction.response.send_message(
+            f"⚠️ `{clean}` เป็น default voice ปัจจุบัน — `/voice-clone "
+            f"set-default` ไปเสียงอื่นก่อนถึงจะลบได้", ephemeral=True)
         return
     if not confirm:
         await interaction.response.send_message(
