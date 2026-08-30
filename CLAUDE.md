@@ -41,7 +41,7 @@ No test suite, linter, or build step in this repo — nothing to run beyond the 
 
 ## Architecture
 
-**Everything funnels through `mlx_audio.tts.generate.generate_audio()` + `mlx_audio.tts.utils.load_model()`** (external `mlx-audio` package, pinned as a git dependency in requirements.txt). All three scripts (`main.py`, `qwen_clone_tts.py`, `tune_voice.py`, `tts_daemon.py`) call these the same way; `qwen_clone_tts.py` is the shared source of truth for constants (`MODEL_PATH`, `VOICES_DIR`, `MAX_CHARS`, mood/instruct presets, `chunk_text()`) — both `tts_daemon.py` and `tune_voice.py` import from it rather than duplicating.
+**Everything funnels through `mlx_audio.tts.generate.generate_audio()` + `mlx_audio.tts.utils.load_model()`** (external `mlx-audio` package, pinned as a git dependency in requirements.txt). All three scripts (`main.py`, `qwen_clone_tts.py`, `tune_voice.py`, `tts_daemon.py`) call these the same way; `qwen_clone_tts.py` is the shared source of truth for constants (`MODEL_PATH`, `VOICES_DIR`, `MAX_CHARS`, mood/instruct presets, `chunk_text()`) — `tts_daemon.py`, `tune_voice.py`, and `voice_store.py` (imports `VOICES_DIR`) import from it rather than duplicating. `discord_say_bot.py` imports `voice_store` for the `/voice-clone` command group (voice-file CRUD + reference-audio prep — a pure module with no `discord` import, unit-tested via `test_voice_store.py`).
 
 **Two ways `qwen_clone_tts.py` produces audio, decided at runtime:**
 1. If `/tmp/qwen_tts_daemon.sock` exists → send a JSON request to `tts_daemon.py` (fast path, no model load).
