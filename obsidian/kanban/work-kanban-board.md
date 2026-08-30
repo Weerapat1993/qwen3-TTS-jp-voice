@@ -14,10 +14,9 @@ kanban-plugin: board
 
 ## REVIEW
 
-- [TTS-1007](tasks/TTS-1007.md): เพิ่ม mood presets ใหม่ (งอน/เขิน/ภูมิใจ/กังวล) + A/B validate ว่าโมเดลแยกเสียงจริง
-
 ## DONE
 
+- [TTS-1007](tasks/TTS-1007.md): เพิ่ม mood presets ใหม่ (งอน/เขิน/ภูมิใจ/กังวล) + A/B validate ว่าโมเดลแยกเสียงจริง
 - [TTS-1006](tasks/TTS-1006.md): /say — เพิ่ม language override กัน TTS ออกเสียงผิดภาษา (lang_code ผ่าน daemon protocol)
 - [TTS-1005](tasks/TTS-1005.md): /transcribe — อัปโหลดไฟล์เสียง วิเคราะห์เป็นข้อความ + emoji mood พร้อมใช้กับ /say
 - [TTS-1004](tasks/TTS-1004.md): เปลี่ยน ?say prefix command เป็น slash command /say
