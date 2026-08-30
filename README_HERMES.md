@@ -27,7 +27,8 @@ Hermes (text_to_speech tool)
 | `/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/` | โปรเจกต์ TTS หลัก |
 | `qwen_clone_tts.py` | CLI สร้างเสียง; โหมด `--stdin <in> <out>` ใช้กับ Hermes; แบ่งข้อความเป็น chunk ≤300 ตัวอักษรแล้วต่อเสียง; `--lang <code>` optional (default `auto`, Hermes ไม่ต้องส่ง) |
 | `tts_daemon.py` | daemon โหลดโมเดลค้างไว้ (socket `/tmp/qwen_tts_daemon.sock`) ลดเวลาโหลดโมเดลซ้ำ |
-| `voices/*.wav` | เสียงต้นฉบับสำหรับโคลน เช่น `Liino.wav`, `Liino_Intro.wav` |
+| `voices/*.wav` | เสียงต้นฉบับสำหรับโคลน เช่น `Liino.wav` |
+| `voice-intro/*.wav` | เสียงแนะนำตัวตอนเข้า Voice Channel (`Liino_Intro.wav`) — แยกจาก voices/ กัน voice-clone ทับ |
 | `models/` | โมเดล MLX 8-bit |
 | `~/.hermes/skills/creative/tts-voice-clone/SKILL.md` | skill ของ Hermes ที่สรุปวิธีใช้ + pitfalls |
 
@@ -66,7 +67,7 @@ tts:
 discord:
   voice_fx:
     enabled: true
-    intro_path: /Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/voices/Liino_Intro.wav
+    intro_path: /Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/voice-intro/Liino_Intro.wav
     # ambient_enabled, ambient_gain, duck_gain, speech_gain, lead_silence_ms, ack_* มี default อยู่แล้ว
 ```
 
