@@ -187,3 +187,16 @@ def test_prepare_ref_audio_rejects_non_audio(tmp_path):
     src.write_text("this is not audio", encoding="utf-8")
     with pytest.raises(VoiceStoreError):
         vs.prepare_ref_audio(str(src), str(tmp_path / "out.wav"))
+
+
+@requires_ffmpeg
+def test_prepare_ref_audio_no_partial_output_on_failure(tmp_path):
+    # ต้นทางเสียงได้ (ผ่าน probe) แต่ ffmpeg เขียน output ไม่ได้ (dir ไม่มีจริง)
+    src = tmp_path / "ok.wav"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi",
+         "-i", "sine=frequency=440:duration=5", str(src)], check=True)
+    dst = tmp_path / "missing_dir" / "out.wav"
+    with pytest.raises(VoiceStoreError):
+        vs.prepare_ref_audio(str(src), str(dst))
+    assert not dst.exists()

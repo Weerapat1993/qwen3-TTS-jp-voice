@@ -157,5 +157,8 @@ def prepare_ref_audio(src_path: str, dst_wav: str) -> float:
          "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", dst_wav],
         capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(dst_wav):
+        # ffmpeg อาจทิ้ง output ที่เขียนไม่จบไว้ — ลบทิ้งไม่ให้กลายเป็น voice เสีย
+        if os.path.exists(dst_wav):
+            os.remove(dst_wav)
         raise VoiceStoreError(f"ffmpeg convert failed: {r.stderr.strip()}")
     return duration
