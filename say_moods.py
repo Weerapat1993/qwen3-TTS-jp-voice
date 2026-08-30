@@ -35,6 +35,22 @@ def parse_lines(raw: str) -> list[str]:
     return out
 
 
+def first_line_over_limit(lines, max_chars: int) -> tuple[int, int] | None:
+    """หาบรรทัดแรกที่ยาวเกิน max_chars (TTS-1003)
+
+    รับ iterable ของข้อความที่พูดจริง (หลังตัด emoji/trim แล้ว) คืน
+    (เลขบรรทัดฐาน 1, ความยาว) ของบรรทัดแรกที่เกิน; ถ้าทุกบรรทัดอยู่ในลิมิต -> None
+
+    เช็ค per-line ไม่รวมความยาวทุกบรรทัด และไม่จำกัดจำนวนบรรทัด — daemon reject
+    ที่ MAX_CHARS ต่อ request อยู่แล้ว ลิมิตต่อบรรทัดจึงสอดคล้องกันพอดี
+    """
+    for idx, line in enumerate(lines, start=1):
+        n = len(line)
+        if n > max_chars:
+            return idx, n
+    return None
+
+
 def extract_mood(line: str) -> tuple[str, str | None]:
     """หา emoji ตัวแรกที่ map ได้ใน line -> คืน (ข้อความที่ตัด emoji นั้นออก, mood)
 

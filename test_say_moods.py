@@ -1,5 +1,10 @@
-"""Unit test สำหรับ say_moods pure logic (TTS-1002)"""
-from say_moods import EMOJI_MOOD, extract_mood, parse_lines
+"""Unit test สำหรับ say_moods pure logic (TTS-1002, TTS-1003)"""
+from say_moods import (
+    EMOJI_MOOD,
+    extract_mood,
+    first_line_over_limit,
+    parse_lines,
+)
 from qwen_clone_tts import MOOD_PRESETS
 
 
@@ -73,3 +78,34 @@ def test_extract_mood_line_is_only_emoji():
 def test_extract_mood_unmapped_before_mapped():
     # 🍕 ไม่ใช่ key -> ข้าม, เจอ 😡 -> angry, ตัดเฉพาะ 😡
     assert extract_mood("🍕 ของโปรด 😡") == ("🍕 ของโปรด", "angry")
+
+
+# --- first_line_over_limit (TTS-1003: per-line char limit) ---
+
+def test_first_line_over_limit_none_when_all_within():
+    assert first_line_over_limit(["a" * 300, "b" * 10, "c" * 299], 300) is None
+
+
+def test_first_line_over_limit_total_over_but_per_line_ok():
+    # รวม 3 บรรทัด = 450 > 300 แต่ต่อบรรทัดไม่เกิน -> ผ่าน (พฤติกรรมใหม่)
+    assert first_line_over_limit(["x" * 150, "y" * 150, "z" * 150], 300) is None
+
+
+def test_first_line_over_limit_flags_first_offender_with_length():
+    assert first_line_over_limit(["ok", "x" * 301, "y" * 400], 300) == (2, 301)
+
+
+def test_first_line_over_limit_boundary_301():
+    assert first_line_over_limit(["z" * 301], 300) == (1, 301)
+
+
+def test_first_line_over_limit_exactly_limit_ok():
+    assert first_line_over_limit(["z" * 300], 300) is None
+
+
+def test_first_line_over_limit_empty():
+    assert first_line_over_limit([], 300) is None
+
+
+def test_first_line_over_limit_accepts_generator():
+    assert first_line_over_limit((s for s in ["short", "w" * 999]), 300) == (2, 999)
