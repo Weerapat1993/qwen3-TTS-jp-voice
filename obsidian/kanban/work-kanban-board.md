@@ -10,9 +10,9 @@ kanban-plugin: board
 
 ## PLAN
 
-- [TTS-1010](tasks/TTS-1010.md): /say voice: + configurable default voice (/voice-clone set-default) + resolve_instruct() voice-default
-
 ## INPROGRESS
+
+- [TTS-1010](tasks/TTS-1010.md): /say voice: + configurable default voice (/voice-clone set-default) + resolve_instruct() voice-default
 
 ## REVIEW
 

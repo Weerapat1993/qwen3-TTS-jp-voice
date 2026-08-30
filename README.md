@@ -26,7 +26,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
 | **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
 | **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
-| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>]` — joins your voice channel and speaks with the Liino voice via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood; `/transcribe` turns an audio upload into paste-ready text; `/voice-clone` create/list/edit/delete/test manages cloned voices from Discord (upload a clip → auto-transcribed reference) | `discord_say_bot.py` |
+| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>] [voice:<name>]` — joins your voice channel and speaks with a cloned voice (default voice, or `voice:` to pick one) via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood; `/transcribe` turns an audio upload into paste-ready text; `/voice-clone` create/list/edit/delete/test/set-default manages cloned voices from Discord (upload a clip → auto-transcribed reference) | `discord_say_bot.py` |
 
 ---
 
@@ -251,7 +251,7 @@ Important caveat: Qwen3-TTS is GPU-bound (Metal) — macOS always prioritizes GP
 
 ## Discord Bot (`discord_say_bot.py`)
 
-Optional Discord bot that adds an application slash command `/say`: pass either `text:<text>` (a single line) or `file:<x.txt>` (a `.txt` attachment for multi-line input), plus an optional `mood:<preset>`. The bot joins the voice channel you're currently in, generates speech with the cloned "Liino" voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic. A second command, `/transcribe`, converts an uploaded audio file into paste-ready `/say` text (see below).
+Optional Discord bot that adds an application slash command `/say`: pass either `text:<text>` (a single line) or `file:<x.txt>` (a `.txt` attachment for multi-line input), plus an optional `mood:<preset>` and `voice:<name>`. The bot joins the voice channel you're currently in, generates speech with a cloned voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, `resolve_instruct()`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic. A second command, `/transcribe`, converts an uploaded audio file into paste-ready `/say` text (see below).
 
 The command tree is synced on `on_ready`. If `DISCORD_GUILD_ID` is set, `/say` is registered to just that guild and appears instantly; otherwise it's registered globally and can take up to ~1 hour to show up the first time.
 
@@ -276,7 +276,8 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
 
 ### Behavior
 
-- **`/say text:<text>`** — joins the voice channel of the command user and speaks `<text>` with the Liino voice. `text` is meant for a single line (Discord desktop can't type a newline in a slash field).
+- **`/say text:<text>`** — joins the voice channel of the command user and speaks `<text>` with the current default voice (or `voice:<name>` if given). `text` is meant for a single line (Discord desktop can't type a newline in a slash field).
+- **`voice:<name>`** — override the voice for this call only (autocomplete lists names from `voices/`, filtered as you type — dynamic rather than a static dropdown, so it still works past Discord's 25-choice limit). An unknown/unsanitizable name is rejected with an ephemeral error before anything is queued. Leave it unset to use the default voice set via `/voice-clone set-default` (falls back to `Liino` if none was ever set). If the chosen voice has a stored `instruct.txt`, it's used as the instruct fallback (after `mood`/explicit instruct, before the built-in default — see `resolve_instruct()`).
 - **`/say file:<x.txt>`** — upload a UTF-8 `.txt` attachment (≤ 100 KB) for multi-line input: one line per sentence, real newlines in the file. Same pipeline as `text` (emoji auto-mood, per-line limit, etc.).
 - **You must supply exactly one of `text:` or `file:`** — neither or both is rejected with an ephemeral error before anything is queued. A `file:` that isn't `.txt`, is over 100 KB, or isn't valid UTF-8 is rejected the same way.
 - **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, `pouty`, `shy`, `proud`, `worried`, etc.), picked from the `mood` choice dropdown. Works with both `text:` and `file:`.
@@ -361,20 +362,28 @@ independently of the bot.
   description in the same style as the `MOOD_PRESETS` — is stored in
   `voices/<name>.instruct.txt`. Names are limited to `a-z 0-9 _` (1–32 chars).
   `Liino` is protected: overwriting it needs `overwrite:true`.
-- **`/voice-clone list`** — lists every voice with its transcript status and
-  stored instruction.
+- **`/voice-clone list`** — lists every voice with its transcript status,
+  stored instruction, and marks `(default)` next to the current default voice.
+- **`/voice-clone set-default name:<name>`** — sets the voice `/say` uses when
+  no `voice:` is given. Stored in `voices/.default` (one line, plain text);
+  rejects names that don't exist yet. Falls back to `Liino` if `.default` is
+  missing or points at a voice that was since deleted.
 - **`/voice-clone edit name:<name> [instruction:<text>] [rename:<new>]`** —
   updates the stored instruction (send an empty `instruction` to clear it)
   and/or renames the voice (moves `.wav` / `.txt` / `.instruct.txt` together).
+  Renaming the current default voice is rejected — `set-default` to a
+  different voice first.
 - **`/voice-clone delete name:<name> confirm:<true>`** — removes all three
-  files. `confirm:true` is required; `Liino` cannot be deleted.
+  files. `confirm:true` is required; `Liino` and the current default voice
+  cannot be deleted (`set-default` elsewhere first for the latter).
 - **`/voice-clone test name:<name> [text:<text>] [mood:<preset>]`** — generates
   a short sample with that voice via the daemon fast path and posts the `.wav`.
   Instruction priority: `mood` preset > the voice's stored instruction >
   default.
 
-Playing a cloned voice through `/say` is a separate change (`/say voice:` — see
-TTS-1010); today `/say` still always uses `Liino`.
+`/say voice:<name>` (see above) plays any cloned voice, not just the default —
+`/voice-clone set-default` only controls what `/say` uses when `voice:` is
+omitted.
 
 ---
 
