@@ -1,0 +1,16 @@
+[mood:surprised] Hm? Time to hit the stage?
+[mood:excited] Twinkle-twinkle! My last performance is about to start!
+[mood:excited] Singing, dancing, and thinking on my feet,
+[mood:proud] I'm a straight-A idol in every category!
+[mood:proud] Wherever we go, I want to be the star that catches everyone's eye!
+[mood:gentle] Would you choose one for me?
+[mood:gentle] Something easy enough for a total combat novice like me?
+[mood:surprised] It's my first time wearing this stage gear...
+[mood:bored] Hmm. Maybe I should come up with a few dance moves to go with it?
+[mood:excited] I understood it in a flash!
+[mood:excited] Just like a star igniting my soul...
+[mood:proud] I'm becoming quite the luminary, aren't I?
+[mood:excited] What a stage entry!
+[mood:sad] You sure I can't use it for my next concert?
+[mood:surprised] Ugh?
+[mood:pouty] What a missed opportunity...
