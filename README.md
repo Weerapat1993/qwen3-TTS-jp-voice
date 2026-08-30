@@ -26,7 +26,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
 | **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
 | **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
-| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>]` — joins your voice channel and speaks with the Liino voice via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood; `/transcribe` turns an audio upload into paste-ready text | `discord_say_bot.py` |
+| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>]` — joins your voice channel and speaks with the Liino voice via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood; `/transcribe` turns an audio upload into paste-ready text; `/voice-clone` create/list/edit/delete/test manages cloned voices from Discord (upload a clip → auto-transcribed reference) | `discord_say_bot.py` |
 
 ---
 
@@ -344,6 +344,37 @@ Upload an `.mp3` or `.wav` and the bot transcribes it locally with Whisper
   down.
 - First run downloads the Whisper model (~1.6 GB, see
   `TRANSCRIBE_WHISPER_MODEL`). It loads once and stays in the bot process.
+
+### `/voice-clone` — manage cloned voices from Discord
+
+A command group for creating and managing the voices in `voices/` without
+touching the filesystem by hand. All subcommands are guild-only and replies are
+ephemeral (only the caller sees them). The file operations live in
+`voice_store.py` (a pure module, no `discord` import) so they're unit-tested
+independently of the bot.
+
+- **`/voice-clone create name:<name> file:<audio> [instruction:<text>] [overwrite:<bool>]`**
+  — upload a reference clip (`.mp3` / `.wav` / `.m4a` / `.ogg`, ≤ 25 MB, ≥ 3 s).
+  The clip is converted to mono 24 kHz and trimmed to the first 12 s, saved as
+  `voices/<name>.wav`, then transcribed with Whisper into `voices/<name>.txt`
+  (improves cloning quality). An optional `instruction` — a short English tone
+  description in the same style as the `MOOD_PRESETS` — is stored in
+  `voices/<name>.instruct.txt`. Names are limited to `a-z 0-9 _` (1–32 chars).
+  `Liino` is protected: overwriting it needs `overwrite:true`.
+- **`/voice-clone list`** — lists every voice with its transcript status and
+  stored instruction.
+- **`/voice-clone edit name:<name> [instruction:<text>] [rename:<new>]`** —
+  updates the stored instruction (send an empty `instruction` to clear it)
+  and/or renames the voice (moves `.wav` / `.txt` / `.instruct.txt` together).
+- **`/voice-clone delete name:<name> confirm:<true>`** — removes all three
+  files. `confirm:true` is required; `Liino` cannot be deleted.
+- **`/voice-clone test name:<name> [text:<text>] [mood:<preset>]`** — generates
+  a short sample with that voice via the daemon fast path and posts the `.wav`.
+  Instruction priority: `mood` preset > the voice's stored instruction >
+  default.
+
+Playing a cloned voice through `/say` is a separate change (`/say voice:` — see
+TTS-1010); today `/say` still always uses `Liino`.
 
 ---
 
