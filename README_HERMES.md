@@ -25,7 +25,7 @@ Hermes (text_to_speech tool)
 | Path | หน้าที่ |
 |---|---|
 | `/Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon/` | โปรเจกต์ TTS หลัก |
-| `qwen_clone_tts.py` | CLI สร้างเสียง; โหมด `--stdin <in> <out>` ใช้กับ Hermes; แบ่งข้อความเป็น chunk ≤300 ตัวอักษรแล้วต่อเสียง |
+| `qwen_clone_tts.py` | CLI สร้างเสียง; โหมด `--stdin <in> <out>` ใช้กับ Hermes; แบ่งข้อความเป็น chunk ≤300 ตัวอักษรแล้วต่อเสียง; `--lang <code>` optional (default `auto`, Hermes ไม่ต้องส่ง) |
 | `tts_daemon.py` | daemon โหลดโมเดลค้างไว้ (socket `/tmp/qwen_tts_daemon.sock`) ลดเวลาโหลดโมเดลซ้ำ |
 | `voices/*.wav` | เสียงต้นฉบับสำหรับโคลน เช่น `Liino.wav`, `Liino_Intro.wav` |
 | `models/` | โมเดล MLX 8-bit |
@@ -129,6 +129,7 @@ hermes gateway restart        # รันจาก shell ปกติเท่�
 cd /Users/mungmee/Desktop/Project/Python/qwen3-tts-apple-silicon
 printf '<ข้อความ>' > /tmp/tts_text.txt
 .venv/bin/python qwen_clone_tts.py --stdin /tmp/tts_text.txt <output.wav>
+# ระบุภาษา (ไม่บังคับ — default auto): --lang japanese
 # โหมด CLI เต็ม: --text "..." --voice <Name> --out <file.wav> --instruct "บรรยายน้ำเสียง"
 ```
 

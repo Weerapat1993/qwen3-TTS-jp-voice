@@ -20,7 +20,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **WAV or MP3 output** | Generate MP3 directly via ffmpeg (`libmp3lame`) instead of WAV | `--mp3` flag |
 | **Background daemon** | Load the model once, serve requests over a Unix socket — skips the ~3-10s model load on every call | `tts_daemon.py` |
 | **FIFO job queue** | Daemon serializes concurrent requests; in-flight jobs are never cancelled | `tts_daemon.py` |
-| **Response caching** | Identical `(voice, text, instruct)` requests return cached audio instantly | `tts_daemon.py` |
+| **Response caching** | Identical `(voice, text, instruct, lang)` requests return cached audio instantly | `tts_daemon.py` |
 | **Idle model unload** | Daemon frees ~6.7GB RAM after N idle seconds, reloads automatically on next request | `TTS_IDLE_UNLOAD` env var |
 | **JSONL telemetry** | Every request logged (timing, cache hits, system load) for debugging/analysis | `TTS_TELEMETRY_LOG` env var |
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
@@ -159,6 +159,7 @@ python qwen_clone_tts.py \
 | `--mp3` | no | Convert output to `.mp3` via ffmpeg instead of `.wav` |
 | `--instruct "..."` | no | Free-text tone/style description, e.g. `"calm British narrator"` |
 | `--instruct-long` | no | Use the built-in long-form default instruct preset instead of `--instruct` |
+| `--lang CODE` | no (default `auto`) | Output language for the TTS model. `auto` lets the model infer it from the text. Valid: `auto, chinese, english, french, german, italian, japanese, korean, portuguese, russian, spanish`. **Thai is not a model language — Thai text uses `auto`.** |
 
 **File / stdin mode** (reads text from a file, auto-chunks it, always uses the `Liino` voice):
 
@@ -166,6 +167,7 @@ python qwen_clone_tts.py \
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.mp3 --mp3
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav --instruct-long
+python qwen_clone_tts.py --stdin path/to/input.ja.txt out.wav --lang japanese
 ```
 
 Exit code `0` = success (`OK <path>` printed to stdout). Non-zero = failure (`ERROR: ...` printed to stderr).
@@ -188,7 +190,7 @@ Or install as a launchd background service — see `launchd/com.liino.qwen-tts-d
 
 - **FIFO queue** — requests are served one at a time, in order. A job that is already generating is never cancelled mid-flight.
 - **Queue timeout** — if a new request is estimated to wait longer than `TTS_QUEUE_TIMEOUT` seconds, the daemon rejects it immediately with `error: "queue timeout"` instead of making it wait.
-- **Response caching** — identical `(voice, text, instruct)` requests return a cached file instantly (`cached: true` in the response), even after the model has been idle-unloaded.
+- **Response caching** — identical `(voice, text, instruct, lang)` requests return a cached file instantly (`cached: true` in the response), even after the model has been idle-unloaded. A request with no `lang` (or `lang: "auto"`) uses the same cache key it always did, so upgrading the daemon does not invalidate the existing cache.
 - **300-char limit** — requests over `MAX_CHARS` (300) are rejected immediately, before entering the queue. Long-text chunking is currently disabled.
 - **MP3 output** — request `"format": "mp3"` (or `--mp3` on the client). Audio is generated once as WAV, cached, then converted to MP3 with ffmpeg (`libmp3lame -q:a 4`) — it never regenerates from scratch for a format change.
 - **Idle unload** — set `TTS_IDLE_UNLOAD` (seconds, default `0` = disabled). If no request arrives for longer than this, the daemon frees the model from RAM (~6.7GB) and reloads it automatically (~3s) on the next request. Cache hits still respond instantly even while the model is unloaded.
@@ -210,11 +212,13 @@ Send one JSON object + `\n` over the Unix socket; receive one JSON response + `\
 
 ```json
 // request
-{"text": "hello", "instruct": null, "out_path": "/tmp/out.wav", "voice": "Liino", "format": "wav"}
+{"text": "hello", "instruct": null, "out_path": "/tmp/out.wav", "voice": "Liino", "format": "wav", "lang": "auto"}
 
 // response
 {"ok": true, "out_path": "/tmp/out.wav", "gen_s": 3.2, "error": null, "cached": false, "queue_wait_s": 0.01, "format": "wav"}
 ```
+
+`lang` is optional and defaults to `"auto"` (omitting it is identical to sending `"auto"`). Valid values are `auto` plus the model's language codes: `chinese, english, french, german, italian, japanese, korean, portuguese, russian, spanish`. An unknown code returns `ok: false`.
 
 The `qwen_clone_tts.py` client already implements this protocol — talk to the daemon directly only if you're building a new client.
 
@@ -259,6 +263,7 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
 - **`/say file:<x.txt>`** — upload a UTF-8 `.txt` attachment (≤ 100 KB) for multi-line input: one line per sentence, real newlines in the file. Same pipeline as `text` (emoji auto-mood, per-line limit, etc.).
 - **You must supply exactly one of `text:` or `file:`** — neither or both is rejected with an ephemeral error before anything is queued. A `file:` that isn't `.txt`, is over 100 KB, or isn't valid UTF-8 is rejected the same way.
 - **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, etc.), picked from the `mood` choice dropdown. Works with both `text:` and `file:`.
+- **`language:<code>`** — pin the TTS output language (`japanese`, `english`, `chinese`, …) so text isn't mispronounced in the wrong language. Leave it unset for `auto` (the model infers language from the text; Thai always uses `auto`). Applies to every line of a `text:` or `file:` request.
 - **Multi-line handling** — each line is spoken one per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped. There is no cap on the number of lines (longer messages just take longer to generate through the daemon's FIFO queue).
 - **Ephemeral replies** — usage hints and every error (over-limit line, no voice channel, daemon down, etc.) are sent as an ephemeral reply visible only to the command user. On success the queue confirmation (`🔊 เข้าคิวแล้ว N บรรทัด`) is posted to the channel.
 - **Emoji auto-mood** — the first recognised emoji on a line sets that line's mood and is removed from the spoken text (e.g. `😄สวัสดี` → says "สวัสดี" with the `excited` mood). An explicit `mood:` choice always overrides emoji. Unrecognised emoji are left in the text and don't change the mood. Emoji → mood map:
