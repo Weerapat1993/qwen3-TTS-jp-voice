@@ -3,7 +3,8 @@
 
 Usage:
     qwen_clone_tts.py --text "ข้อความ" [--voice Liino] [--out /path/out.wav]
-                      [--instruct "คำบรรยายน้ำเสียง"] [--lang th|en|...]
+                      [--instruct "คำบรรยายน้ำเสียง"]
+                      [--lang auto|japanese|english|chinese|...]
 
 Hermes command-provider mode:
     qwen_clone_tts.py --stdin <input_path> <output_path>
@@ -67,6 +68,30 @@ MOOD_PRESETS: dict[str, str] = {
 }
 
 
+# ภาษาที่ Qwen3-TTS-12Hz รองรับ — ดึงจาก config.json ของโมเดล
+# (talker_config.codec_language_id) + "auto" (ให้โมเดลเดาจากข้อความ)
+# หมายเหตุ: โมเดลไม่รองรับภาษาไทย — ข้อความไทยใช้ "auto" เท่านั้น
+LANG_CODES: tuple[str, ...] = (
+    "auto", "chinese", "english", "french", "german", "italian",
+    "japanese", "korean", "portuguese", "russian", "spanish",
+)
+
+
+def resolve_lang(lang: str | None) -> str:
+    """normalize + validate language code — คืน "auto" ถ้าไม่ระบุ
+
+    lowercase + strip; ไม่อยู่ใน LANG_CODES -> ValueError (caller แปลงเป็น
+    ERROR: / ephemeral). ปล่อยผ่านเงียบ ๆ ไม่ได้ เพราะ lang ผิดจะออกเสียงเพี้ยน
+    """
+    if not lang:
+        return "auto"
+    code = lang.strip().lower()
+    if code not in LANG_CODES:
+        raise ValueError(
+            f"unknown lang '{code}' — choices: {', '.join(LANG_CODES)}")
+    return code
+
+
 def resolve_instruct(mood: str | None, instruct: str | None,
                      instruct_long: bool) -> str | None:
     """เลือก instruct: --mood มีลำดับความสำคัญก่อน --instruct / --instruct-long"""
@@ -125,7 +150,8 @@ DAEMON_CONNECT_TIMEOUT_S = 5.0  # connect socket ต้องเร็ว
 
 
 def _try_daemon(text: str, out_path: str, instruct: str | None,
-                voice: str = "Liino", fmt: str = "wav") -> bool:
+                voice: str = "Liino", fmt: str = "wav",
+                lang: str = "auto") -> bool:
     """ส่งงานผ่าน tts_daemon ถ้ารันอยู่ — คืน False ถ้า daemon ไม่พร้อม"""
     import json as _json
     import socket as _socket
@@ -138,7 +164,7 @@ def _try_daemon(text: str, out_path: str, instruct: str | None,
         sock.connect(SOCK_PATH)
         sock.sendall((_json.dumps(
             {"text": text, "instruct": instruct, "out_path": out_path,
-             "voice": voice, "format": fmt}) + "\n").encode("utf-8"))
+             "voice": voice, "format": fmt, "lang": lang}) + "\n").encode("utf-8"))
         sock.settimeout(DAEMON_TIMEOUT_S)
         buf = b""
         while not buf.endswith(b"\n"):
@@ -182,7 +208,7 @@ def _convert_to_mp3(path: str) -> str:
 
 
 def _run(voice: str, text: str, out_path: str, instruct: str | None,
-         mp3: bool = False) -> int:
+         mp3: bool = False, lang: str = "auto") -> int:
     ref_audio = os.path.join(VOICES_DIR, f"{voice}.wav")
     if not os.path.exists(ref_audio):
         print(f"ERROR: ref voice not found: {ref_audio}", file=sys.stderr)
@@ -190,7 +216,7 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
 
     # ลอง daemon ก่อน (ไม่ต้องโหลดโมเดล) — ถ้าไม่รัน fallback โหลดเอง
     if _try_daemon(text, out_path, instruct, voice,
-                   fmt="mp3" if mp3 else "wav"):
+                   fmt="mp3" if mp3 else "wav", lang=lang):
         return 0
 
     ref_text = None
@@ -231,7 +257,8 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
                         contextlib.redirect_stdout(io.StringIO()):
                     generate_audio(model=model, text=chunk,
                                    ref_audio=ref_audio, ref_text=ref_text,
-                                   instruct=instruct, output_path=part)
+                                   instruct=instruct, lang_code=lang,
+                                   output_path=part)
                 if os.path.isdir(part):
                     cands = sorted(
                         (os.path.join(part, f) for f in os.listdir(part)
@@ -266,7 +293,7 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
             shutil.rmtree(tmpdir, ignore_errors=True)
     else:
         generate_audio(model=model, text=text, ref_audio=ref_audio,
-                       ref_text=ref_text, instruct=instruct,
+                       ref_text=ref_text, instruct=instruct, lang_code=lang,
                        output_path=out_path)
         # หาไฟล์ที่ mlx_audio เขียนจริง (บางครั้งต่อท้ายเลขนับ)
         if os.path.isdir(out_path):
@@ -318,6 +345,16 @@ def main() -> int:
             i = rest.index("--mood")
             mood = rest[i + 1] if i + 1 < len(rest) else None
             rest = rest[:i] + rest[i + 2:]
+        lang = "auto"
+        if "--lang" in rest:
+            i = rest.index("--lang")
+            lang = rest[i + 1] if i + 1 < len(rest) else "auto"
+            rest = rest[:i] + rest[i + 2:]
+        try:
+            lang = resolve_lang(lang)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
         try:
             instruct = resolve_instruct(mood, None,
                                         "--instruct-long" in rest)
@@ -325,7 +362,7 @@ def main() -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
         return _run("Liino", text, out_path, instruct,
-                    mp3="--mp3" in rest)
+                    mp3="--mp3" in rest, lang=lang)
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--text", required=True, help="ข้อความที่จะให้อ่าน")
@@ -340,6 +377,9 @@ def main() -> int:
     ap.add_argument("--mood", default=None,
                     choices=sorted(MOOD_PRESETS),
                     help="น้ำเสียงสำเร็จรูป เช่น excited, sleepy, whisper")
+    ap.add_argument("--lang", default="auto", choices=LANG_CODES,
+                    help="ภาษาที่โมเดลออกเสียง (default auto = เดาจากข้อความ; "
+                         "ภาษาไทยใช้ auto)")
     args = ap.parse_args()
     out_path = args.out or os.path.join(
         tempfile.gettempdir(), "qwen_clone_out.wav")
@@ -349,7 +389,8 @@ def main() -> int:
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
-    return _run(args.voice, args.text, out_path, instruct, mp3=args.mp3)
+    return _run(args.voice, args.text, out_path, instruct, mp3=args.mp3,
+                lang=args.lang)
 
 
 if __name__ == "__main__":
