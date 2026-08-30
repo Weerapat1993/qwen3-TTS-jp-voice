@@ -497,6 +497,9 @@ def main() -> int:
                         pass
             _worker_busy["flag"] = False
             _last_request_t = time.time()  # งานจบ — เริ่มนับ idle ใหม่
+            # gap ก่อนงานถัดไป — กันไฟล์ .wav ใหม่เขียนติดกันจนชนกัน/caller
+            # อ่านไฟล์เก่ายังไม่ทันปิด handle (เจอปัญหาตอน queue ยิงรัว ๆ)
+            time.sleep(0.5)
 
     threading.Thread(target=worker, daemon=True).start()
 
