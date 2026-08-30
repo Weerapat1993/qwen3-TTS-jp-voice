@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Discord say bot — prefix command `?say <ข้อความ> [--mood <preset>]`
+"""Discord say bot — slash command `/say text:<ข้อความ> | file:<x.txt> [mood:<preset>]`
+
+`text` = ข้อความบรรทัดเดียว, `file` = `.txt` attachment สำหรับข้อความหลายบรรทัด
+(ต้องระบุอย่างใดอย่างหนึ่ง — XOR)
 
 ให้บอทเข้า voice channel ที่ผู้สั่งอยู่ สร้างเสียงด้วย qwen3-tts (เสียงโคลน Liino)
 ผ่าน tts_daemon fast path เท่านั้น (ไม่ fallback โหลดโมเดลเองถ้า daemon ล่ม —
@@ -10,25 +13,27 @@ Usage:
 
 ต้อง export DISCORD_BOT_TOKEN เป็น process env var ก่อนรัน (โปรเจกต์นี้ไม่มีการโหลด
 .env อัตโนมัติ — ไฟล์ .env ที่มีอยู่ใน repo root ใช้สำหรับ NOTION_API_TOKEN ของ
-kanban tooling เท่านั้น ไม่เกี่ยวกับ script นี้) และต้องเปิด privileged
-"Message Content Intent" ใน Discord Developer Portal ของบอทนี้ (นอกเหนือจากโค้ด)
-ไม่งั้นบอทจะอ่านข้อความ prefix command ไม่ได้ (ดูเหมือน "ไม่ตอบสนอง" เฉยๆ)
+kanban tooling เท่านั้น ไม่เกี่ยวกับ script นี้)
+
+`/say` เป็น application slash command ไม่ต้องเปิด privileged "Message Content Intent"
+ใน Developer Portal อีกต่อไป แต่ invite URL ของบอทต้องมี scope `applications.commands`
+ไม่งั้น command จะไม่ถูก register
 
 Env vars:
-    DISCORD_BOT_TOKEN      (required, secret) Discord bot token — ห้าม hardcode
-    DISCORD_COMMAND_PREFIX (default "?") prefix ของ text command
-    VC_IDLE_TIMEOUT_S      (default 60) วินาทีที่รอก่อนออกจาก VC หลังคิวเล่นเสียงว่าง
-    SAY_SENTENCE_GAP_S    (default 0.5) วินาทีที่เว้นเงียบหลังจบแต่ละประโยคก่อนเล่นบรรทัดถัดไป (0 = ปิด)
+    DISCORD_BOT_TOKEN     (required, secret) Discord bot token — ห้าม hardcode
+    DISCORD_GUILD_ID      (optional) ถ้าตั้ง = register /say เฉพาะ guild นี้ (เห็นทันที);
+                          ไม่ตั้ง = global registration (ครั้งแรกรอ propagate ได้ถึง ~1 ชม.)
+    VC_IDLE_TIMEOUT_S     (default 60) วินาทีที่รอก่อนออกจาก VC หลังคิวเล่นเสียงว่าง
+    SAY_SENTENCE_GAP_S   (default 0.5) วินาทีที่เว้นเงียบหลังจบแต่ละประโยคก่อนเล่นบรรทัดถัดไป (0 = ปิด)
 """
 import asyncio
 import os
-import re
 import sys
 import tempfile
 import time
 
 import discord
-from discord.ext import commands
+from discord import app_commands
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
@@ -38,17 +43,18 @@ from qwen_clone_tts import MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruc
 from say_moods import extract_mood, first_line_over_limit, parse_lines  # noqa: E402
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-COMMAND_PREFIX = os.environ.get("DISCORD_COMMAND_PREFIX", "?")
+DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
 VC_IDLE_TIMEOUT_S = float(os.environ.get("VC_IDLE_TIMEOUT_S", "60"))
 SAY_SENTENCE_GAP_S = float(os.environ.get("SAY_SENTENCE_GAP_S", "0.5"))
 
 DEFAULT_VOICE = "Liino"
 
+# slash command ไม่ต้องอ่านเนื้อความ -> ใช้ default intents (มี voice_states ที่ต้องใช้
+# อ่าน interaction.user.voice อยู่แล้ว) ห้ามเปิด message_content
 intents = discord.Intents.default()
-intents.message_content = True  # ต้องเปิด privileged intent ใน Developer Portal ด้วย
 
-bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents,
-                    help_command=None)
+client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
 
 class GuildPlayback:
@@ -143,43 +149,83 @@ def _get_playback(guild: discord.Guild) -> GuildPlayback:
     return pb
 
 
-_MOOD_ARG_RE = re.compile(r"(?:^|\s)--mood\s+(\S+)")
-
-
-def _parse_say_args(raw: str) -> tuple[str, str | None]:
-    """แยก `--mood <preset>` ออกจาก raw เหลือแค่ข้อความที่จะพูด
-
-    prefix command ธรรมดาไม่มี option parser ของ slash command จึงต้อง parse เอง
-    ใช้ regex (ไม่ใช่ .split()) เพื่อคง newline ในข้อความหลายบรรทัดไว้ (TTS-1002)
-    """
-    mood: str | None = None
-    m = _MOOD_ARG_RE.search(raw)
-    if m:
-        mood = m.group(1)
-        raw = raw[:m.start()] + raw[m.end():]
-    return raw.strip(), mood
-
-
-@bot.event
+@client.event
 async def on_ready() -> None:
-    print(f"discord_say_bot: logged in as {bot.user} "
-          f"(prefix={COMMAND_PREFIX!r}, idle_timeout={VC_IDLE_TIMEOUT_S:.0f}s)",
+    if DISCORD_GUILD_ID:
+        guild = discord.Object(id=int(DISCORD_GUILD_ID))
+        tree.copy_global_to(guild=guild)
+        synced = await tree.sync(guild=guild)
+    else:
+        synced = await tree.sync()
+    print(f"discord_say_bot: logged in as {client.user} "
+          f"(slash cmds synced={len(synced)}, "
+          f"guild={DISCORD_GUILD_ID or 'global'}, "
+          f"idle_timeout={VC_IDLE_TIMEOUT_S:.0f}s)",
           file=sys.stderr, flush=True)
 
 
-@bot.command(name="say")
-@commands.guild_only()
-async def say(ctx: commands.Context, *, text: str = "") -> None:
-    raw, explicit_mood = _parse_say_args(text)
-    lines = parse_lines(raw)
-    if not lines:
-        await ctx.reply(
-            f"ใช้: `{COMMAND_PREFIX}say <ข้อความ>` (หลายบรรทัดได้ ไม่จำกัดจำนวนบรรทัด "
-            f"1 บรรทัด = 1 ประโยค ไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด) "
-            f"`[--mood <preset>]`\nmood: {', '.join(sorted(MOOD_PRESETS))}")
+@tree.command(name="say",
+              description="ให้บอทพูดข้อความใน voice channel ด้วยเสียง Liino")
+@app_commands.guild_only()
+@app_commands.describe(
+    text="ข้อความบรรทัดเดียว (หลายบรรทัดให้ใช้ file:)",
+    mood="โทนเสียง (ไม่เลือก = auto จาก emoji หรือปกติ)",
+    file="ไฟล์ .txt สำหรับข้อความหลายบรรทัด (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB)")
+@app_commands.choices(mood=[
+    app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)])
+async def say(interaction: discord.Interaction, text: str | None = None,
+              mood: str | None = None,
+              file: discord.Attachment | None = None) -> None:
+    explicit_mood = mood  # ชื่อ preset ที่เลือกจาก dropdown หรือ None
+
+    # ต้องระบุ text หรือ file อย่างใดอย่างหนึ่ง (XOR) — เช็คก่อน defer
+    if (text is None) == (file is None):
+        await interaction.response.send_message(
+            "ใช้: `/say text:<ข้อความ>` (บรรทัดเดียว) หรือ `/say file:<x.txt>` "
+            "(หลายบรรทัด) — เลือกอย่างใดอย่างหนึ่ง", ephemeral=True)
         return
 
-    # (spoken_text, mood ที่จะใช้จริง) ต่อบรรทัด — explicit --mood ชนะ emoji เสมอ
+    if file is not None:
+        # type/size เช็คได้ก่อน download; .txt = content_type ขึ้นต้น text/ หรือ
+        # filename ลงท้าย .txt (Discord ส่ง content_type เป็น None ได้สำหรับ .txt)
+        name_ok = file.filename.lower().endswith(".txt")
+        type_ok = (file.content_type or "").startswith("text/")
+        if not (name_ok or type_ok):
+            await interaction.response.send_message(
+                "ไฟล์ต้องเป็น `.txt` (UTF-8 text)", ephemeral=True)
+            return
+        if file.size > 100_000:
+            await interaction.response.send_message(
+                "ไฟล์ใหญ่เกิน 100 KB", ephemeral=True)
+            return
+        # ไฟล์ ≤100 KB จาก Discord CDN โหลดเร็ว -> read + decode ก่อน defer ได้
+        # (error ทุกจุดตอนนี้ยังเป็น response.send_message เหมือน path อื่น)
+        try:
+            raw = await file.read()
+        except discord.DiscordException as e:  # noqa: BLE001
+            await interaction.response.send_message(
+                f"อ่านไฟล์ไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        try:
+            source_text = raw.decode("utf-8-sig")  # -sig = กิน BOM ถ้ามี
+        except UnicodeDecodeError:
+            await interaction.response.send_message(
+                "ไฟล์ต้องเป็น UTF-8 text", ephemeral=True)
+            return
+        src = "file"
+    else:
+        source_text = text
+        src = "text"
+
+    lines = parse_lines(source_text)
+    if not lines:
+        await interaction.response.send_message(
+            f"ไม่มีข้อความให้พูด — ใช้ `/say text:<ข้อความ>` หรือ `/say file:<x.txt>` "
+            f"(1 บรรทัด = 1 ประโยค ไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด)",
+            ephemeral=True)
+        return
+
+    # (spoken_text, mood ที่จะใช้จริง) ต่อบรรทัด — explicit mood ชนะ emoji เสมอ
     prepared: list[tuple[str, str | None]] = []
     for line in lines:
         spoken, auto_mood = extract_mood(line)
@@ -187,7 +233,8 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
             continue  # บรรทัดที่เหลือแต่ emoji/ว่าง -> ข้าม
         prepared.append((spoken, explicit_mood or auto_mood))
     if not prepared:
-        await ctx.reply("ไม่มีข้อความให้พูด (บรรทัดว่าง/มีแต่ emoji ทั้งหมด)")
+        await interaction.response.send_message(
+            "ไม่มีข้อความให้พูด (บรรทัดว่าง/มีแต่ emoji ทั้งหมด)", ephemeral=True)
         return
 
     # เช็คลิมิต per-line (TTS-1003): แต่ละบรรทัด (หลังตัด emoji/trim) ≤ MAX_CHARS
@@ -196,26 +243,32 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
     over = first_line_over_limit((spoken for spoken, _ in prepared), MAX_CHARS)
     if over is not None:
         line_no, line_len = over
-        await ctx.reply(f"⚠️ บรรทัดที่ {line_no} ยาวเกินไป ({line_len} ตัวอักษร "
-                         f"หลังตัด emoji) — จำกัดไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด")
+        await interaction.response.send_message(
+            f"⚠️ บรรทัดที่ {line_no} ยาวเกินไป ({line_len} ตัวอักษร หลังตัด emoji) "
+            f"— จำกัดไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด", ephemeral=True)
         return
     total_chars = sum(len(spoken) for spoken, _ in prepared)
 
-    # resolve instruct ทุกบรรทัดก่อน (mood ผิด -> reject ทั้ง batch)
+    # resolve instruct ทุกบรรทัดก่อน (mood ผิด -> reject ทั้ง batch; ปกติ dropdown
+    # จะเลือกผิดไม่ได้ แต่กันไว้เผื่อ client ส่งค่านอก choices มา)
     jobs_meta: list[tuple[str, str | None]] = []  # (spoken, instruct)
-    for spoken, mood in prepared:
+    for spoken, m in prepared:
         try:
-            instruct = resolve_instruct(mood, None, False)
+            instruct = resolve_instruct(m, None, False)
         except ValueError as e:
-            await ctx.reply(f"⚠️ {e}")
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
             return
         jobs_meta.append((spoken, instruct))
 
-    author_voice = getattr(ctx.author, "voice", None)
+    author_voice = getattr(interaction.user, "voice", None)
     if author_voice is None or author_voice.channel is None:
-        await ctx.reply("ต้องเข้า voice channel ก่อนถึงจะใช้คำสั่งนี้ได้")
+        await interaction.response.send_message(
+            "ต้องเข้า voice channel ก่อนถึงจะใช้คำสั่งนี้ได้", ephemeral=True)
         return
     voice_channel = author_voice.channel
+
+    # ผ่าน validation หมดแล้ว — gen ช้ากว่า 3 วิ ต้อง defer ก่อน (spinner เห็นเฉพาะคนสั่ง)
+    await interaction.response.defer(ephemeral=True, thinking=True)
 
     # generate ครบทุกบรรทัดก่อน queue — บรรทัดใด fail -> ลบไฟล์ทั้ง batch, ไม่ queue
     t0 = time.time()
@@ -238,19 +291,24 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
                 pass
             # Decision (ดู TTS-1001 plan): daemon ล่ม/ตอบ error -> แจ้งทันที
             # ไม่ fallback ไปโหลดโมเดลเองในบอท; batch เป็น atomic
-            await ctx.reply("⚠️ TTS daemon ไม่พร้อมใช้งาน (ล่ม/ยังไม่ได้รัน หรือสร้าง"
-                             "เสียงไม่สำเร็จ) — ไม่มีบรรทัดไหนถูกเล่น ตรวจ log ของบอท "
-                             "แล้วลองสตาร์ท `tts_daemon.py` ใหม่")
+            await interaction.followup.send(
+                "⚠️ TTS daemon ไม่พร้อมใช้งาน (ล่ม/ยังไม่ได้รัน หรือสร้างเสียงไม่สำเร็จ) "
+                "— ไม่มีบรรทัดไหนถูกเล่น ตรวจ log ของบอท แล้วลองสตาร์ท `tts_daemon.py` ใหม่",
+                ephemeral=True)
             return
         wav_paths.append(wav_path)
     gen_s = time.time() - t0
 
-    playback = _get_playback(ctx.guild)
+    playback = _get_playback(interaction.guild)
     playback.ensure_worker()
     for wav_path in wav_paths:
-        await playback.queue.put((voice_channel, ctx.channel, wav_path))
-    print(f"discord_say_bot: queued say guild={ctx.guild.id} "
-          f"lines={len(wav_paths)} gen_s={gen_s:.2f} "
+        await playback.queue.put((voice_channel, interaction.channel, wav_path))
+
+    # success: แจ้ง channel ปกติ + เคลียร์ spinner ephemeral ของคนสั่ง
+    await interaction.channel.send(f"🔊 เข้าคิวแล้ว {len(wav_paths)} บรรทัด")
+    await interaction.followup.send("✅ เข้าคิวแล้ว", ephemeral=True)
+    print(f"discord_say_bot: queued say guild={interaction.guild.id} "
+          f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
           f"explicit_mood={explicit_mood} chars={total_chars}",
           file=sys.stderr, flush=True)
 
@@ -261,7 +319,7 @@ def main() -> int:
               "environment variable before running (no .env auto-load in "
               "this project)", file=sys.stderr)
         return 1
-    bot.run(DISCORD_BOT_TOKEN)
+    client.run(DISCORD_BOT_TOKEN)
     return 0
 
 
