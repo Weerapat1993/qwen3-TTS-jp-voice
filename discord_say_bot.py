@@ -35,7 +35,7 @@ sys.path.insert(0, PROJ)
 
 # reuse ของเดิมจาก qwen_clone_tts.py ทั้งหมด — ห้าม duplicate ค่า/logic
 from qwen_clone_tts import MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
-from say_moods import extract_mood, parse_lines  # noqa: E402
+from say_moods import extract_mood, first_line_over_limit, parse_lines  # noqa: E402
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 COMMAND_PREFIX = os.environ.get("DISCORD_COMMAND_PREFIX", "?")
@@ -174,7 +174,8 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
     lines = parse_lines(raw)
     if not lines:
         await ctx.reply(
-            f"ใช้: `{COMMAND_PREFIX}say <ข้อความ>` (หลายบรรทัดได้ 1 บรรทัด = 1 ประโยค) "
+            f"ใช้: `{COMMAND_PREFIX}say <ข้อความ>` (หลายบรรทัดได้ ไม่จำกัดจำนวนบรรทัด "
+            f"1 บรรทัด = 1 ประโยค ไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด) "
             f"`[--mood <preset>]`\nmood: {', '.join(sorted(MOOD_PRESETS))}")
         return
 
@@ -189,11 +190,16 @@ async def say(ctx: commands.Context, *, text: str = "") -> None:
         await ctx.reply("ไม่มีข้อความให้พูด (บรรทัดว่าง/มีแต่ emoji ทั้งหมด)")
         return
 
-    total_chars = sum(len(spoken) for spoken, _ in prepared)
-    if total_chars > MAX_CHARS:
-        await ctx.reply(f"⚠️ ข้อความยาวเกินไป ({total_chars} ตัวอักษรรวมทุกบรรทัด "
-                         f"หลังตัด emoji) — จำกัดไม่เกิน {MAX_CHARS} ตัวอักษร")
+    # เช็คลิมิต per-line (TTS-1003): แต่ละบรรทัด (หลังตัด emoji/trim) ≤ MAX_CHARS
+    # ไม่จำกัดจำนวนบรรทัดและไม่รวมความยาวทุกบรรทัด — daemon reject ที่ MAX_CHARS
+    # ต่อ request อยู่แล้ว บรรทัดใดเกิน -> reject ทั้ง batch ระบุเลขบรรทัด
+    over = first_line_over_limit((spoken for spoken, _ in prepared), MAX_CHARS)
+    if over is not None:
+        line_no, line_len = over
+        await ctx.reply(f"⚠️ บรรทัดที่ {line_no} ยาวเกินไป ({line_len} ตัวอักษร "
+                         f"หลังตัด emoji) — จำกัดไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด")
         return
+    total_chars = sum(len(spoken) for spoken, _ in prepared)
 
     # resolve instruct ทุกบรรทัดก่อน (mood ผิด -> reject ทั้ง batch)
     jobs_meta: list[tuple[str, str | None]] = []  # (spoken, instruct)

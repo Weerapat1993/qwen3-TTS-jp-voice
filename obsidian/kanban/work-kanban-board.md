@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## BACKLOG
 
-- [TTS-1003](tasks/TTS-1003.md): ?say เปลี่ยนลิมิตเป็นต่อบรรทัด + จำนวนบรรทัดไม่จำกัด
-
 ## TODO
 
 ## PLAN
@@ -15,6 +13,8 @@ kanban-plugin: board
 ## INPROGRESS
 
 ## REVIEW
+
+- [TTS-1003](tasks/TTS-1003.md): ?say เปลี่ยนลิมิตเป็นต่อบรรทัด + จำนวนบรรทัดไม่จำกัด
 
 ## DONE
 

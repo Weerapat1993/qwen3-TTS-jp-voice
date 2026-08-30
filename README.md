@@ -256,7 +256,7 @@ export DISCORD_BOT_TOKEN=...
 
 - **`?say <text>`** — joins the voice channel of the message author and speaks `<text>` with the Liino voice.
 - **`?say <text> --mood <preset>`** — same, but applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, etc.).
-- **Multi-line** — a `?say` message with several lines is spoken one line per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped.
+- **Multi-line** — a `?say` message with several lines is spoken one line per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped. There is no cap on the number of lines (longer messages just take longer to generate through the daemon's FIFO queue).
 - **Emoji auto-mood** — the first recognised emoji on a line sets that line's mood and is removed from the spoken text (e.g. `😄สวัสดี` → says "สวัสดี" with the `excited` mood). An explicit `--mood <preset>` always overrides emoji. Unrecognised emoji are left in the text and don't change the mood. Emoji → mood map:
 
   | mood | emoji |
@@ -272,7 +272,7 @@ export DISCORD_BOT_TOKEN=...
   | `bored` | 😑 😐 🙄 |
   | `storyteller` | 📖 📚 🧚 |
 
-- The `MAX_CHARS` (300) limit applies to the **combined** length of all lines after emoji removal — over the limit is rejected immediately with a readable error and never queued.
+- The `MAX_CHARS` (300) limit applies **per line** (measured after emoji removal and trimming), matching the daemon's own per-request limit. If any single line is over 300 chars, the whole message is rejected immediately with a readable error naming the offending line number, and nothing is queued. The combined length of all lines is not limited.
 - **Atomic batch** — if any line fails to generate (daemon down mid-batch), no line is played and the temp files are cleaned up.
 - If you're not in a voice channel when you run `?say`, the bot replies with an error and does not join anything.
 - **Playback queue per guild** — TTS generation always runs in a background thread (`asyncio.to_thread`) so it never blocks the bot's Discord heartbeat. Once audio is generated it's placed on a per-guild `asyncio.Queue`; a worker plays files one at a time via `discord.FFmpegPCMAudio`, waiting for each one to finish before starting the next — concurrent `?say` calls queue up instead of overlapping.
