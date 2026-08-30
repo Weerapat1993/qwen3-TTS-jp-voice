@@ -22,6 +22,23 @@ EMOJI_MOOD: dict[str, str] = {
 }
 
 
+# mood name -> emoji ตัวแทนหนึ่งตัวที่ extract_mood() map กลับมาเป็น mood เดิม
+# เลือก emoji ตัวแรกของแต่ละกลุ่มใน EMOJI_MOOD ด้านบน; mood ที่ไม่มี emoji สื่อ
+# ความหมายชัด (default, long) ตั้งใจไม่ใส่ -> /transcribe จะไม่เติม prefix
+MOOD_EMOJI: dict[str, str] = {
+    "excited": "😄",
+    "giggle": "😆",
+    "surprised": "😮",
+    "sad": "😢",
+    "angry": "😠",
+    "sleepy": "😴",
+    "whisper": "🤫",
+    "gentle": "🥺",
+    "bored": "😑",
+    "storyteller": "📖",
+}
+
+
 def parse_lines(raw: str) -> list[str]:
     """split ข้อความเป็นบรรทัด: 1 บรรทัด = 1 ประโยค
 
