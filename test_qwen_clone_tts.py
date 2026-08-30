@@ -40,8 +40,8 @@ def test_lang_codes_has_auto_first_and_is_sorted_rest():
     assert list(LANG_CODES[1:]) == sorted(LANG_CODES[1:])
 
 
-# ---------- resolve_instruct (mood > instruct > voice_default >
-# MOOD_PRESETS["default"]) ----------
+# ---------- resolve_instruct (mood [+ voice_default composed] > instruct >
+# voice_default > MOOD_PRESETS["default"]) ----------
 
 def test_resolve_instruct_2args_backward_compat():
     # ผู้เรียกเดิม (Hermes/CLI/tune_voice.py) ส่งแค่ 2 args — ต้องยังทำงาน
@@ -50,9 +50,20 @@ def test_resolve_instruct_2args_backward_compat():
     assert resolve_instruct(None, "custom instruct") == "custom instruct"
 
 
-def test_resolve_instruct_mood_wins_over_instruct_and_voice_default():
+def test_resolve_instruct_mood_wins_over_explicit_instruct():
+    # explicit instruct ถูกทิ้งเมื่อมี mood — แต่ voice_default ถูก compose เข้าไป
     assert resolve_instruct("excited", "custom", "voice default") \
-        == MOOD_PRESETS["excited"]
+        == f"voice default {MOOD_PRESETS['excited']}"
+
+
+def test_resolve_instruct_mood_composes_with_voice_default():
+    # voice_default (timbre/gender ของเสียง) + mood trait ต่อกัน ไม่ทับทิ้งกัน
+    assert resolve_instruct("sad", None, "A deep male voice.") \
+        == f"A deep male voice. {MOOD_PRESETS['sad']}"
+
+
+def test_resolve_instruct_mood_without_voice_default():
+    assert resolve_instruct("excited", None, None) == MOOD_PRESETS["excited"]
 
 
 def test_resolve_instruct_explicit_instruct_wins_over_voice_default():

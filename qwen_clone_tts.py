@@ -27,44 +27,44 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 VOICES_DIR = os.path.join(PROJ, "voices")
 MODEL_PATH = os.path.join(PROJ, "models", "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 MAX_CHARS = 300
-DEFAULT_INSTRUCT = "Cheerful, bright, playful young female voice. Clear and friendly, natural pace, not childish."
+DEFAULT_INSTRUCT = "Cheerful, bright, playful voice. Clear and friendly, natural pace, not childish."
 
 
 MOOD_PRESETS: dict[str, str] = {
     # ชื่อ mood -> instruct ที่ส่งให้โมเดล (ภาษาอังกฤษเพื่อความแม่นของโมเดล)
     "default":   DEFAULT_INSTRUCT,
-    "excited":   "Very excited and enthusiastic young female voice, "
+    "excited":   "Very excited and enthusiastic voice, "
                  "fast-paced and energetic, sparkling with joy.",
-    "sleepy":    "Soft, drowsy, relaxed young female voice. Slow pace, "
+    "sleepy":    "Soft, drowsy, relaxed voice. Slow pace, "
                  "gentle and low energy, like talking just before falling asleep.",
-    "surprised": "Surprised young female voice with a gasp of amazement, "
+    "surprised": "Surprised voice with a gasp of amazement, "
                  "wide-eyed and astonished, briefly raised pitch.",
-    "sad":       "Sad, melancholic young female voice. Slow, quiet and "
+    "sad":       "Sad, melancholic voice. Slow, quiet and "
                  "emotional, with a hint of sniffle, not overly dramatic.",
-    "angry":     "Angry, pouty young female voice. Sharp and huffy like "
+    "angry":     "Angry, pouty voice. Sharp and huffy like "
                  "playful irritation, not genuinely hostile.",
-    "whisper":   "Soft whispering young female voice. Very quiet, intimate "
+    "whisper":   "Soft whispering voice. Very quiet, intimate "
                  "and close to the microphone, sharing a secret.",
-    "gentle":    "Warm, gentle, soothing young female voice. Kind and calm, "
+    "gentle":    "Warm, gentle, soothing voice. Kind and calm, "
                  "comforting, moderate slow pace.",
-    "giggle":    "Playful young female voice mid-giggle, light and bouncy, "
+    "giggle":    "Playful voice mid-giggle, light and bouncy, "
                  "cheerful with a little laugh in the tone.",
-    "bored":     "Bored, unenthusiastic young female voice. Flat and droning, "
+    "bored":     "Bored, unenthusiastic voice. Flat and droning, "
                  "dragging slightly, with a sigh in the middle, low energy.",
     "storyteller": "Warm expressive storyteller voice, like narrating a "
                    "bedtime story. Rich intonation, gentle suspense, "
                    "slowing down at key moments, inviting the listener in.",
-    "pouty":     "Sulky, reluctant, mildly petulant young female voice. "
+    "pouty":     "Sulky, reluctant, mildly petulant voice. "
                  "Clipped and flat, slightly dragging, not genuinely angry.",
-    "shy":       "Shy, bashful, hesitant young female voice. Soft and quiet, "
+    "shy":       "Shy, bashful, hesitant voice. Soft and quiet, "
                  "with small nervous pauses.",
-    "proud":     "Proud, pleased, self-assured young female voice. Warm and "
+    "proud":     "Proud, pleased, self-assured voice. Warm and "
                  "steady, chin-up confidence.",
-    "worried":   "Worried, anxious, uneasy young female voice. Slightly "
+    "worried":   "Worried, anxious, uneasy voice. Slightly "
                  "hurried and tense, with uneven breath.",
-    "scared":    "Scared, frightened young female voice. Shaky and breathless, "
+    "scared":    "Scared, frightened voice. Shaky and breathless, "
                  "quick pace, tense pitch with a slight tremble.",
-    "confused":  "Confused, puzzled young female voice. Hesitant, uneven pace, "
+    "confused":  "Confused, puzzled voice. Hesitant, uneven pace, "
                  "rising questioning intonation, slightly slow to process.",
 }
 
@@ -98,6 +98,12 @@ def resolve_instruct(mood: str | None, instruct: str | None,
     """เลือก instruct ตามลำดับ: mood > instruct (explicit) >
     voice_default (จาก <voice>.instruct.txt) > MOOD_PRESETS["default"]
 
+    mood ถูก compose เข้ากับ voice_default แทนที่จะทับทิ้ง (ถ้ามีทั้งคู่) —
+    voice_default เก็บ timbre/gender/character ของเสียงนั้น (คงที่ทุก mood),
+    MOOD_PRESETS เก็บแค่ trait ของอารมณ์ (ไม่ผูกเพศ/อายุ) ผลลัพธ์คือ
+    "<voice_default> <mood trait>" เช่น เสียงชาย + mood excited ไม่ได้ "young
+    female" ติดมาด้วย
+
     voice_default เป็น keyword param ท้ายพร้อม default None เพื่อ backward-compat
     กับผู้เรียกเดิมที่ส่งแค่ 2 args (Hermes/CLI/tune_voice.py)
     """
@@ -106,7 +112,10 @@ def resolve_instruct(mood: str | None, instruct: str | None,
         if m not in MOOD_PRESETS:
             raise ValueError(
                 f"unknown mood '{m}' — choices: {', '.join(sorted(MOOD_PRESETS))}")
-        return MOOD_PRESETS[m]
+        mood_text = MOOD_PRESETS[m]
+        if voice_default:
+            return f"{voice_default} {mood_text}"
+        return mood_text
     if instruct:
         return instruct
     if voice_default:
