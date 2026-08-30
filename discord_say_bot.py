@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Discord say bot — slash command `/say text:<ข้อความ> [mood:<preset>]`
+"""Discord say bot — slash command `/say text:<ข้อความ> | file:<x.txt> [mood:<preset>]`
+
+`text` = ข้อความบรรทัดเดียว, `file` = `.txt` attachment สำหรับข้อความหลายบรรทัด
+(ต้องระบุอย่างใดอย่างหนึ่ง — XOR)
 
 ให้บอทเข้า voice channel ที่ผู้สั่งอยู่ สร้างเสียงด้วย qwen3-tts (เสียงโคลน Liino)
 ผ่าน tts_daemon fast path เท่านั้น (ไม่ fallback โหลดโมเดลเองถ้า daemon ล่ม —
@@ -165,18 +168,60 @@ async def on_ready() -> None:
               description="ให้บอทพูดข้อความใน voice channel ด้วยเสียง Liino")
 @app_commands.guild_only()
 @app_commands.describe(
-    text="ข้อความ (1 บรรทัด = 1 ประโยค; วางข้อความหลายบรรทัดได้)",
-    mood="โทนเสียง (ไม่เลือก = auto จาก emoji หรือปกติ)")
+    text="ข้อความบรรทัดเดียว (หลายบรรทัดให้ใช้ file:)",
+    mood="โทนเสียง (ไม่เลือก = auto จาก emoji หรือปกติ)",
+    file="ไฟล์ .txt สำหรับข้อความหลายบรรทัด (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB)")
 @app_commands.choices(mood=[
     app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)])
-async def say(interaction: discord.Interaction, text: str,
-              mood: str | None = None) -> None:
+async def say(interaction: discord.Interaction, text: str | None = None,
+              mood: str | None = None,
+              file: discord.Attachment | None = None) -> None:
     explicit_mood = mood  # ชื่อ preset ที่เลือกจาก dropdown หรือ None
-    lines = parse_lines(text)
+
+    # ต้องระบุ text หรือ file อย่างใดอย่างหนึ่ง (XOR) — เช็คก่อน defer
+    if (text is None) == (file is None):
+        await interaction.response.send_message(
+            "ใช้: `/say text:<ข้อความ>` (บรรทัดเดียว) หรือ `/say file:<x.txt>` "
+            "(หลายบรรทัด) — เลือกอย่างใดอย่างหนึ่ง", ephemeral=True)
+        return
+
+    if file is not None:
+        # type/size เช็คได้ก่อน download; .txt = content_type ขึ้นต้น text/ หรือ
+        # filename ลงท้าย .txt (Discord ส่ง content_type เป็น None ได้สำหรับ .txt)
+        name_ok = file.filename.lower().endswith(".txt")
+        type_ok = (file.content_type or "").startswith("text/")
+        if not (name_ok or type_ok):
+            await interaction.response.send_message(
+                "ไฟล์ต้องเป็น `.txt` (UTF-8 text)", ephemeral=True)
+            return
+        if file.size > 100_000:
+            await interaction.response.send_message(
+                "ไฟล์ใหญ่เกิน 100 KB", ephemeral=True)
+            return
+        # ไฟล์ ≤100 KB จาก Discord CDN โหลดเร็ว -> read + decode ก่อน defer ได้
+        # (error ทุกจุดตอนนี้ยังเป็น response.send_message เหมือน path อื่น)
+        try:
+            raw = await file.read()
+        except discord.DiscordException as e:  # noqa: BLE001
+            await interaction.response.send_message(
+                f"อ่านไฟล์ไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        try:
+            source_text = raw.decode("utf-8-sig")  # -sig = กิน BOM ถ้ามี
+        except UnicodeDecodeError:
+            await interaction.response.send_message(
+                "ไฟล์ต้องเป็น UTF-8 text", ephemeral=True)
+            return
+        src = "file"
+    else:
+        source_text = text
+        src = "text"
+
+    lines = parse_lines(source_text)
     if not lines:
         await interaction.response.send_message(
-            f"ใช้: `/say text:<ข้อความ> [mood:<preset>]` (หลายบรรทัดได้ ไม่จำกัด"
-            f"จำนวนบรรทัด 1 บรรทัด = 1 ประโยค ไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด)",
+            f"ไม่มีข้อความให้พูด — ใช้ `/say text:<ข้อความ>` หรือ `/say file:<x.txt>` "
+            f"(1 บรรทัด = 1 ประโยค ไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด)",
             ephemeral=True)
         return
 
@@ -263,7 +308,7 @@ async def say(interaction: discord.Interaction, text: str,
     await interaction.channel.send(f"🔊 เข้าคิวแล้ว {len(wav_paths)} บรรทัด")
     await interaction.followup.send("✅ เข้าคิวแล้ว", ephemeral=True)
     print(f"discord_say_bot: queued say guild={interaction.guild.id} "
-          f"lines={len(wav_paths)} gen_s={gen_s:.2f} "
+          f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
           f"explicit_mood={explicit_mood} chars={total_chars}",
           file=sys.stderr, flush=True)
 

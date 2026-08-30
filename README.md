@@ -26,7 +26,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
 | **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
 | **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
-| **Discord voice bot** | Slash command `/say text:<text> [mood:<preset>]` — joins your voice channel and speaks with the Liino voice via the daemon; supports multi-line input and emoji auto-mood | `discord_say_bot.py` |
+| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>]` — joins your voice channel and speaks with the Liino voice via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood | `discord_say_bot.py` |
 
 ---
 
@@ -230,7 +230,7 @@ Important caveat: Qwen3-TTS is GPU-bound (Metal) — macOS always prioritizes GP
 
 ## Discord Bot (`discord_say_bot.py`)
 
-Optional Discord bot that adds an application slash command `/say text:<text> [mood:<preset>]`: the bot joins the voice channel you're currently in, generates speech with the cloned "Liino" voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic.
+Optional Discord bot that adds an application slash command `/say`: pass either `text:<text>` (a single line) or `file:<x.txt>` (a `.txt` attachment for multi-line input), plus an optional `mood:<preset>`. The bot joins the voice channel you're currently in, generates speech with the cloned "Liino" voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic.
 
 The command tree is synced on `on_ready`. If `DISCORD_GUILD_ID` is set, `/say` is registered to just that guild and appears instantly; otherwise it's registered globally and can take up to ~1 hour to show up the first time.
 
@@ -255,9 +255,11 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
 
 ### Behavior
 
-- **`/say text:<text>`** — joins the voice channel of the command user and speaks `<text>` with the Liino voice.
-- **`/say text:<text> mood:<preset>`** — same, but applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, etc.), picked from the `mood` choice dropdown.
-- **Multi-line** — paste text with several lines into the `text` option (Discord desktop can't type a newline in a slash field, but pasted newlines work). Each line is spoken one per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped. There is no cap on the number of lines (longer messages just take longer to generate through the daemon's FIFO queue).
+- **`/say text:<text>`** — joins the voice channel of the command user and speaks `<text>` with the Liino voice. `text` is meant for a single line (Discord desktop can't type a newline in a slash field).
+- **`/say file:<x.txt>`** — upload a UTF-8 `.txt` attachment (≤ 100 KB) for multi-line input: one line per sentence, real newlines in the file. Same pipeline as `text` (emoji auto-mood, per-line limit, etc.).
+- **You must supply exactly one of `text:` or `file:`** — neither or both is rejected with an ephemeral error before anything is queued. A `file:` that isn't `.txt`, is over 100 KB, or isn't valid UTF-8 is rejected the same way.
+- **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, etc.), picked from the `mood` choice dropdown. Works with both `text:` and `file:`.
+- **Multi-line handling** — each line is spoken one per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped. There is no cap on the number of lines (longer messages just take longer to generate through the daemon's FIFO queue).
 - **Ephemeral replies** — usage hints and every error (over-limit line, no voice channel, daemon down, etc.) are sent as an ephemeral reply visible only to the command user. On success the queue confirmation (`🔊 เข้าคิวแล้ว N บรรทัด`) is posted to the channel.
 - **Emoji auto-mood** — the first recognised emoji on a line sets that line's mood and is removed from the spoken text (e.g. `😄สวัสดี` → says "สวัสดี" with the `excited` mood). An explicit `mood:` choice always overrides emoji. Unrecognised emoji are left in the text and don't change the mood. Emoji → mood map:
 
