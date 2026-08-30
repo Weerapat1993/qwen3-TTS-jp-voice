@@ -16,10 +16,9 @@ kanban-plugin: board
 
 ## REVIEW
 
-- [TTS-1009](tasks/TTS-1009.md): Discord slash command /voice-clone (create/list/edit/delete/test)
-
 ## DONE
 
+- [TTS-1009](tasks/TTS-1009.md): Discord slash command /voice-clone (create/list/edit/delete/test)
 - [TTS-1008](tasks/TTS-1008.md): daemon fast path ล้มเหลว "no audio produced" เมื่อ out_path เป็น relative (cwd ของ launchd = /)
 - [TTS-1007](tasks/TTS-1007.md): เพิ่ม mood presets ใหม่ (งอน/เขิน/ภูมิใจ/กังวล) + A/B validate ว่าโมเดลแยกเสียงจริง
 - [TTS-1006](tasks/TTS-1006.md): /say — เพิ่ม language override กัน TTS ออกเสียงผิดภาษา (lang_code ผ่าน daemon protocol)
