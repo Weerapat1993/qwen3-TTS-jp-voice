@@ -10,11 +10,11 @@ kanban-plugin: board
 
 ## PLAN
 
-- [TTS-1005](tasks/TTS-1005.md): /transcribe — อัปโหลดไฟล์เสียง วิเคราะห์เป็นข้อความ + emoji mood พร้อมใช้กับ /say
-
 ## INPROGRESS
 
 ## REVIEW
+
+- [TTS-1005](tasks/TTS-1005.md): /transcribe — อัปโหลดไฟล์เสียง วิเคราะห์เป็นข้อความ + emoji mood พร้อมใช้กับ /say
 
 ## DONE
 
