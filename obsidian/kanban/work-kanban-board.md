@@ -6,7 +6,7 @@ kanban-plugin: board
 
 ## BACKLOG
 
-- [TTS-1010](tasks/TTS-1010.md): /say voice: parameter + resolve_instruct() voice-default (per-voice instruction)
+- [TTS-1010](tasks/TTS-1010.md): /say voice: + configurable default voice (/voice-clone set-default) + resolve_instruct() voice-default
 
 ## TODO
 
