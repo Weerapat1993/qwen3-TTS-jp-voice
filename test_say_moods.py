@@ -144,3 +144,34 @@ def test_emoji_mood_has_no_duplicate_keys():
 def test_extract_mood_new_moods_round_trip():
     for mood in ("pouty", "shy", "proud", "worried"):
         assert extract_mood(f"{MOOD_EMOJI[mood]} ข้อความ") == ("ข้อความ", mood)
+
+
+# --- [mood:xxx] tag (--stdin format ของ qwen_clone_tts.py วางลง /say ตรง ๆ) ---
+
+def test_extract_mood_strips_bracket_tag():
+    assert extract_mood("[mood:storyteller] กาลครั้งหนึ่ง") == (
+        "กาลครั้งหนึ่ง", "storyteller")
+
+
+def test_extract_mood_bracket_tag_is_case_insensitive():
+    assert extract_mood("[mood:EXCITED] เย้") == ("เย้", "excited")
+
+
+def test_extract_mood_unknown_bracket_tag_still_stripped():
+    # ชื่อ mood ไม่รู้จัก (ไม่อยู่ใน MOOD_EMOJI) -> ตัด tag ทิ้งเสมอ กัน TTS
+    # อ่านคำว่า "mood" ทับ แต่คืน mood=None (fallback ปกติ)
+    assert extract_mood("[mood:bogus] สวัสดี") == ("สวัสดี", None)
+
+
+def test_extract_mood_bracket_tag_wins_over_later_emoji():
+    # tag ที่ต้นบรรทัดกำหนด mood ชัดเจน (excited) ชนะ emoji 😢 (sad) ที่ตามมา
+    # แต่ emoji ก็ยังถูกตัดออกจากข้อความที่พูดเหมือนเดิม
+    assert extract_mood("[mood:excited] เย้ 😢") == ("เย้", "excited")
+
+
+def test_extract_mood_no_tag_still_falls_back_to_emoji():
+    assert extract_mood("😄 สวัสดี") == ("สวัสดี", "excited")
+
+
+def test_extract_mood_tag_only_no_body():
+    assert extract_mood("[mood:sleepy]") == ("", "sleepy")
