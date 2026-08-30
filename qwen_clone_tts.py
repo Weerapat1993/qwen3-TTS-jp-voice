@@ -62,6 +62,10 @@ MOOD_PRESETS: dict[str, str] = {
                  "steady, chin-up confidence.",
     "worried":   "Worried, anxious, uneasy young female voice. Slightly "
                  "hurried and tense, with uneven breath.",
+    "scared":    "Scared, frightened young female voice. Shaky and breathless, "
+                 "quick pace, tense pitch with a slight tremble.",
+    "confused":  "Confused, puzzled young female voice. Hesitant, uneven pace, "
+                 "rising questioning intonation, slightly slow to process.",
 }
 
 

@@ -18,7 +18,7 @@ def test_emoji_mood_covers_expected_moods():
     assert set(EMOJI_MOOD.values()) == {
         "excited", "giggle", "surprised", "sad", "angry",
         "sleepy", "whisper", "gentle", "bored", "storyteller",
-        "pouty", "shy", "proud", "worried",
+        "pouty", "shy", "proud", "worried", "scared", "confused",
     }
 
 
