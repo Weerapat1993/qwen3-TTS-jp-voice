@@ -12,9 +12,9 @@ kanban-plugin: board
 
 ## INPROGRESS
 
-- [TTS-1011](tasks/TTS-1011.md): Remove MOOD_PRESETS["long"] / DEFAULT_INSTRUCT_LONG (superseded by per-voice set-default instruction)
-
 ## REVIEW
+
+- [TTS-1011](tasks/TTS-1011.md): Remove MOOD_PRESETS["long"] / DEFAULT_INSTRUCT_LONG (superseded by per-voice set-default instruction)
 
 ## DONE
 
