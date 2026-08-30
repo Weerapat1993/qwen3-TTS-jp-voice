@@ -311,34 +311,41 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
 
 def _run_multi(voice: str, segments: list[tuple[str | None, str]],
                voice_default: str | None, out_path: str,
-               mp3: bool = False, lang: str = "auto") -> int:
+               mp3: bool = False, lang: str = "auto",
+               mood: str | None = None) -> int:
     """generate เสียงจากหลาย mood segment (2 ขึ้นไป) แล้ว concat เป็นไฟล์เดียว
     ด้วย ffmpeg — ใช้เมื่อ --stdin มี [mood:xxx] tag ทำให้แบ่งได้มากกว่า 1 segment
     แต่ละ segment ถูก chunk_text() ต่ออีกชั้นถ้ายาวเกิน MAX_CHARS
-    job ใดล้มเหลว -> ทั้งรัน fail ทันที ไม่มีการเล่นเสียงบางส่วน"""
+    job ใดล้มเหลว -> ทั้งรัน fail ทันที ไม่มีการเล่นเสียงบางส่วน
+    segment ที่ไม่มี tag (mood_key=None) ยัง fallback ไปตาม priority เดิม
+    (mood flag ของ --stdin > per-voice default) เหมือน single-segment path"""
+    t_start = time.time()
+
+    def _fail(msg: str, code: int) -> int:
+        print(f"ERROR: {msg}", file=sys.stderr)
+        print(f"TIMING failed after {time.time() - t_start:.1f}s",
+              file=sys.stderr)
+        return code
+
     ref_audio = os.path.join(VOICES_DIR, f"{voice}.wav")
     if not os.path.exists(ref_audio):
-        print(f"ERROR: ref voice not found: {ref_audio}", file=sys.stderr)
-        return 1
+        return _fail(f"ref voice not found: {ref_audio}", 1)
 
     jobs: list[tuple[str | None, str]] = []
     for mood_key, seg_text in segments:
         try:
-            instruct = resolve_instruct(mood_key, None, voice_default)
+            instruct = resolve_instruct(mood_key or mood, None, voice_default)
         except ValueError as e:
-            print(f"ERROR: {e}", file=sys.stderr)
-            return 2
+            return _fail(str(e), 2)
         for chunk in chunk_text(seg_text):
             jobs.append((instruct, chunk))
     if not jobs:
-        print("ERROR: no text content after mood-tag parsing", file=sys.stderr)
-        return 1
+        return _fail("no text content after mood-tag parsing", 1)
 
     import shutil
     import subprocess
     if shutil.which("ffmpeg") is None:
-        print("ERROR: ffmpeg not found for concat", file=sys.stderr)
-        return 1
+        return _fail("ffmpeg not found for concat", 1)
 
     tmpdir = tempfile.mkdtemp(prefix="qwen_clone_chunks_")
     part_paths: list[str] = []
@@ -356,9 +363,7 @@ def _run_multi(voice: str, segments: list[tuple[str | None, str]],
                 part = os.path.join(tmpdir, f"part_{i:03d}.wav")
                 if not _try_daemon(text, part, instruct, voice, fmt="wav",
                                    lang=lang, quiet=True):
-                    print(f"ERROR: daemon failed on job {i} of {len(jobs)}",
-                          file=sys.stderr)
-                    return 1
+                    return _fail(f"daemon failed on job {i} of {len(jobs)}", 1)
                 part_paths.append(part)
         else:
             from mlx_audio.tts.utils import load_model
@@ -385,12 +390,10 @@ def _run_multi(voice: str, segments: list[tuple[str | None, str]],
                          if f.endswith((".wav", ".mp3"))),
                         key=os.path.getmtime)
                     if not cands:
-                        print(f"ERROR: no audio for job {i}", file=sys.stderr)
-                        return 1
+                        return _fail(f"no audio for job {i}", 1)
                     part = cands[-1]
                 elif not os.path.exists(part):
-                    print(f"ERROR: job {i} output missing", file=sys.stderr)
-                    return 1
+                    return _fail(f"job {i} output missing", 1)
                 part_paths.append(part)
 
         list_file = os.path.join(tmpdir, "list.txt")
@@ -404,8 +407,7 @@ def _run_multi(voice: str, segments: list[tuple[str | None, str]],
              "-ar", "24000", "-ac", "1", out_path],
             capture_output=True, text=True)
         if r.returncode != 0 or not os.path.exists(out_path):
-            print(f"ERROR: ffmpeg concat failed: {r.stderr}", file=sys.stderr)
-            return 1
+            return _fail(f"ffmpeg concat failed: {r.stderr}", 1)
         gen_s = time.time() - t1
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -473,7 +475,7 @@ def main() -> int:
             return _run("Liino", seg_text, out_path, instruct,
                         mp3="--mp3" in rest, lang=lang)
         return _run_multi("Liino", segments, voice_default, out_path,
-                          mp3="--mp3" in rest, lang=lang)
+                          mp3="--mp3" in rest, lang=lang, mood=mood)
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--text", required=True, help="ข้อความที่จะให้อ่าน")

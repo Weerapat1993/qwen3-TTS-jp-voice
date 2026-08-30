@@ -248,6 +248,57 @@ def test_run_multi_aborts_whole_run_if_daemon_fails_mid_job(monkeypatch, tmp_pat
     assert rc == 1
 
 
+def test_run_multi_falls_back_to_mood_flag_for_untagged_segment(
+        monkeypatch, tmp_path):
+    """segment ที่ไม่มี [mood:xxx] tag (mood_key=None) ต้อง fallback ไปใช้
+    --mood ของ --stdin แทน (mood > per-voice default) เหมือน single-segment
+    path ไม่ใช่ข้าม --mood ไปตกที่ voice_default/MOOD_PRESETS["default"] เฉยๆ"""
+    sent_payloads = []
+
+    class _SeqFakeSock:
+        def __init__(self):
+            self._replied = False
+
+        def settimeout(self, _t):
+            pass
+
+        def connect(self, _p):
+            pass
+
+        def sendall(self, data):
+            sent_payloads.append(json.loads(data.decode("utf-8").strip()))
+
+        def recv(self, _n):
+            if self._replied:
+                return b""
+            self._replied = True
+            return (json.dumps(
+                {"ok": True, "out_path": "/ignored.wav", "gen_s": 0.1}) + "\n"
+            ).encode("utf-8")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(qwen_clone_tts.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: _SeqFakeSock())
+    monkeypatch.setattr(shutil, "which", lambda _n: "/usr/bin/ffmpeg")
+
+    class _FakeCompleted:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **k: _FakeCompleted())
+
+    out_path = str(tmp_path / "out.wav")
+    segments = [(None, "Hello there"), ("sleepy", "Good night")]
+    rc = qwen_clone_tts._run_multi("Liino", segments, None, out_path,
+                                   mood="excited")
+
+    assert rc == 0
+    assert sent_payloads[0]["instruct"] == MOOD_PRESETS["excited"]
+    assert sent_payloads[1]["instruct"] == MOOD_PRESETS["sleepy"]
+
+
 def test_try_daemon_sends_absolute_out_path(monkeypatch, capsys):
     fake = _FakeSock()
     monkeypatch.setattr(qwen_clone_tts.os.path, "exists", lambda _p: True)
