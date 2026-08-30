@@ -14,10 +14,9 @@ kanban-plugin: board
 
 ## REVIEW
 
-- [TTS-1011](tasks/TTS-1011.md): Remove MOOD_PRESETS["long"] / DEFAULT_INSTRUCT_LONG (superseded by per-voice set-default instruction)
-
 ## DONE
 
+- [TTS-1011](tasks/TTS-1011.md): Remove MOOD_PRESETS["long"] / DEFAULT_INSTRUCT_LONG (superseded by per-voice set-default instruction)
 - [TTS-1010](tasks/TTS-1010.md): /say voice: + configurable default voice (/voice-clone set-default) + resolve_instruct() voice-default
 - [TTS-1009](tasks/TTS-1009.md): Discord slash command /voice-clone (create/list/edit/delete/test)
 - [TTS-1008](tasks/TTS-1008.md): daemon fast path ล้มเหลว "no audio produced" เมื่อ out_path เป็น relative (cwd ของ launchd = /)
