@@ -31,7 +31,7 @@ python main.py
 python qwen_clone_tts.py --text "Hello" --voice Liino --instruct "cheerful voice" --out outputs/x.wav [--mp3]
 
 # Hermes-style stdin/file mode (auto-chunks, always voice=Liino)
-python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav [--mp3] [--mood excited] [--instruct-long]
+python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav [--mp3] [--mood excited]
 
 # background daemon (loads model once, serves over Unix socket)
 .venv/bin/python tts_daemon.py

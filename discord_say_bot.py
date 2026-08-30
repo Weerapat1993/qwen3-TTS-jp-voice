@@ -304,7 +304,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     jobs_meta: list[tuple[str, str | None]] = []  # (spoken, instruct)
     for spoken, m in prepared:
         try:
-            instruct = resolve_instruct(m, None, False, voice_instruct)
+            instruct = resolve_instruct(m, None, voice_instruct)
         except ValueError as e:
             await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
             return
