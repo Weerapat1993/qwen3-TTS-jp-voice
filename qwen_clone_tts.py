@@ -182,8 +182,10 @@ DAEMON_CONNECT_TIMEOUT_S = 5.0  # connect socket ต้องเร็ว
 
 def _try_daemon(text: str, out_path: str, instruct: str | None,
                 voice: str = "Liino", fmt: str = "wav",
-                lang: str = "auto") -> bool:
-    """ส่งงานผ่าน tts_daemon ถ้ารันอยู่ — คืน False ถ้า daemon ไม่พร้อม"""
+                lang: str = "auto", quiet: bool = False) -> bool:
+    """ส่งงานผ่าน tts_daemon ถ้ารันอยู่ — คืน False ถ้า daemon ไม่พร้อม
+    quiet=True ไม่ print OK/TIMING (ใช้เมื่อเป็นแค่ part หนึ่งของ multi-job
+    dispatch ใน _run_multi() — ผลลัพธ์สุดท้ายที่ print คือหลัง concat เสร็จ)"""
     import json as _json
     import socket as _socket
     if not os.path.exists(SOCK_PATH):
@@ -213,12 +215,13 @@ def _try_daemon(text: str, out_path: str, instruct: str | None,
     if not resp.get("ok"):
         print(f"ERROR: daemon failed: {resp.get('error')}", file=sys.stderr)
         return False
-    tag = " (cached)" if resp.get("cached") else ""
-    print(f"OK {resp['out_path']}")
-    qw = resp.get("queue_wait_s")
-    qw_s = f" queue_wait={qw:.2f}s" if isinstance(qw, (int, float)) else ""
-    print(f"TIMING via daemon gen={resp.get('gen_s', 0):.2f}s{qw_s}{tag}",
-          file=sys.stderr)
+    if not quiet:
+        tag = " (cached)" if resp.get("cached") else ""
+        print(f"OK {resp['out_path']}")
+        qw = resp.get("queue_wait_s")
+        qw_s = f" queue_wait={qw:.2f}s" if isinstance(qw, (int, float)) else ""
+        print(f"TIMING via daemon gen={resp.get('gen_s', 0):.2f}s{qw_s}{tag}",
+              file=sys.stderr)
     return True
 
 

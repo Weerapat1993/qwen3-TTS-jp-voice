@@ -169,6 +169,31 @@ def test_try_daemon_leaves_absolute_out_path_unchanged(monkeypatch):
     assert payload["out_path"] == "/tmp/already/abs.wav"
 
 
+def test_try_daemon_quiet_suppresses_stdout_and_stderr(monkeypatch, capsys):
+    fake = _FakeSock()
+    monkeypatch.setattr(qwen_clone_tts.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: fake)
+
+    ok = _try_daemon("hi", "outputs/x.wav", None, quiet=True)
+
+    assert ok is True
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_try_daemon_default_not_quiet_still_prints_ok(monkeypatch, capsys):
+    fake = _FakeSock()
+    monkeypatch.setattr(qwen_clone_tts.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: fake)
+
+    ok = _try_daemon("hi", "outputs/x.wav", None)
+
+    assert ok is True
+    captured = capsys.readouterr()
+    assert captured.out.startswith("OK ")
+
+
 @pytest.mark.skipif(
     not os.path.isfile(os.path.join(MODEL_PATH, "config.json")),
     reason="model config not present")
