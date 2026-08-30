@@ -6,13 +6,15 @@ kanban-plugin: board
 
 ## BACKLOG
 
-- [TTS-1009](tasks/TTS-1009.md): Discord slash command /voice-clone (create/list/edit/delete/test) + ให้ /say เลือก voice ได้
+- [TTS-1010](tasks/TTS-1010.md): /say voice: parameter + resolve_instruct() voice-default (per-voice instruction)
 
 ## TODO
 
 ## PLAN
 
 ## INPROGRESS
+
+- [TTS-1009](tasks/TTS-1009.md): Discord slash command /voice-clone (create/list/edit/delete/test)
 
 ## REVIEW
 
