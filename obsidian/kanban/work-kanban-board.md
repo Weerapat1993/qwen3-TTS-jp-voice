@@ -6,11 +6,11 @@ kanban-plugin: board
 
 ## BACKLOG
 
-- [TTS-1005](tasks/TTS-1005.md): /transcribe — อัปโหลดไฟล์เสียง วิเคราะห์เป็นข้อความ + emoji mood พร้อมใช้กับ /say
-
 ## TODO
 
 ## PLAN
+
+- [TTS-1005](tasks/TTS-1005.md): /transcribe — อัปโหลดไฟล์เสียง วิเคราะห์เป็นข้อความ + emoji mood พร้อมใช้กับ /say
 
 ## INPROGRESS
 
