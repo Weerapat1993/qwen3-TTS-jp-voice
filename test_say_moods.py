@@ -1,6 +1,7 @@
 """Unit test สำหรับ say_moods pure logic (TTS-1002, TTS-1003)"""
 from say_moods import (
     EMOJI_MOOD,
+    MOOD_EMOJI,
     extract_mood,
     first_line_over_limit,
     parse_lines,
@@ -109,3 +110,19 @@ def test_first_line_over_limit_empty():
 
 def test_first_line_over_limit_accepts_generator():
     assert first_line_over_limit((s for s in ["short", "w" * 999]), 300) == (2, 999)
+
+
+# --- MOOD_EMOJI (TTS-1005: reverse map for /transcribe line prefixes) ---
+
+def test_mood_emoji_round_trips_through_extract_mood():
+    for mood, emoji in MOOD_EMOJI.items():
+        assert extract_mood(f"{emoji} ข้อความ") == ("ข้อความ", mood)
+
+
+def test_mood_emoji_keys_are_real_presets():
+    for mood in MOOD_EMOJI:
+        assert mood in MOOD_PRESETS
+
+
+def test_mood_emoji_covers_every_evocative_mood():
+    assert set(MOOD_EMOJI) == set(EMOJI_MOOD.values())
