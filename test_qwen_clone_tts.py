@@ -37,29 +37,42 @@ def test_lang_codes_has_auto_first_and_is_sorted_rest():
     assert list(LANG_CODES[1:]) == sorted(LANG_CODES[1:])
 
 
-# ---------- resolve_instruct (mood > instruct > MOOD_PRESETS["default"]) ----------
+# ---------- resolve_instruct (mood > instruct > voice_default >
+# MOOD_PRESETS["default"]) ----------
 # instruct_long/--instruct-long ถูกลบออก (chore) — เสียงยาวสไตล์เดิมยังเรียกได้
 # ผ่าน --mood long เหมือนเดิม เพราะ MOOD_PRESETS["long"] ยังอยู่
 
-def test_resolve_instruct_falls_back_to_mood_preset_default():
+def test_resolve_instruct_2args_backward_compat():
+    # ผู้เรียกเดิม (Hermes/CLI/tune_voice.py) ส่งแค่ 2 args — ต้องยังทำงาน
     assert resolve_instruct(None, None) == MOOD_PRESETS["default"]
-
-
-def test_resolve_instruct_mood_wins_over_instruct():
-    assert resolve_instruct("excited", "custom") == MOOD_PRESETS["excited"]
-
-
-def test_resolve_instruct_explicit_instruct_used_when_no_mood():
+    assert resolve_instruct("excited", None) == MOOD_PRESETS["excited"]
     assert resolve_instruct(None, "custom instruct") == "custom instruct"
 
 
-def test_resolve_instruct_unknown_mood_raises():
-    with pytest.raises(ValueError):
-        resolve_instruct("nope", None)
+def test_resolve_instruct_mood_wins_over_instruct_and_voice_default():
+    assert resolve_instruct("excited", "custom", "voice default") \
+        == MOOD_PRESETS["excited"]
+
+
+def test_resolve_instruct_explicit_instruct_wins_over_voice_default():
+    assert resolve_instruct(None, "custom", "voice default") == "custom"
+
+
+def test_resolve_instruct_voice_default_wins_over_mood_preset_default():
+    assert resolve_instruct(None, None, "voice default") == "voice default"
+
+
+def test_resolve_instruct_falls_back_to_mood_preset_default():
+    assert resolve_instruct(None, None, None) == MOOD_PRESETS["default"]
 
 
 def test_resolve_instruct_mood_long_still_reachable():
     assert resolve_instruct("long", None) == qwen_clone_tts.DEFAULT_INSTRUCT_LONG
+
+
+def test_resolve_instruct_unknown_mood_raises():
+    with pytest.raises(ValueError):
+        resolve_instruct("nope", None, "voice default")
 
 
 class _FakeSock:

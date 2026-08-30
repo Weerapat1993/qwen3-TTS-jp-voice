@@ -25,6 +25,15 @@ RESERVED = frozenset({"liino"})
 MIN_REF_SECONDS = 3.0
 REF_TRIM_SECONDS = 12
 
+# เสียงที่ ship มากับ repo — ใช้เมื่อยังไม่เคยตั้ง default หรือ .default ชี้เสียงที่ถูกลบ
+FALLBACK_VOICE = "Liino"
+
+
+def _default_marker_path() -> str:
+    """path ของไฟล์เก็บ default voice — คำนวณจาก VOICES_DIR ตอนเรียก (ไม่ cache
+    เป็น module-level constant) ให้ monkeypatch VOICES_DIR ใน test มีผลจริง"""
+    return os.path.join(VOICES_DIR, ".default")
+
 
 class VoiceStoreError(Exception):
     """error ที่ปลอดภัยจะแสดงให้ผู้ใช้ Discord เห็น (ข้อความเป็น English)"""
@@ -45,6 +54,38 @@ def sanitize_name(raw: str) -> str:
 
 def is_reserved(name: str) -> bool:
     return name.lower() in RESERVED
+
+
+def get_default_voice() -> str:
+    """คืนชื่อ default voice ปัจจุบัน (lowercase)
+
+    อ่าน DEFAULT_MARKER; ถ้าไฟล์ไม่มี, อ่านไม่ได้, หรือชื่อในไฟล์ไม่มี .wav
+    จริงแล้ว (เสียงถูกลบไปหลังตั้ง default) -> fallback FALLBACK_VOICE เงียบ ๆ
+    ไม่ crash
+    """
+    marker = _default_marker_path()
+    if os.path.exists(marker):
+        with open(marker, "r", encoding="utf-8") as f:
+            name = f.read().strip().lower()
+        if name and voice_exists(name):
+            return name
+    return FALLBACK_VOICE.lower()
+
+
+def set_default_voice(name: str) -> None:
+    """ตั้ง default voice — name ต้อง sanitize + มีอยู่จริงมาก่อนแล้ว (caller เช็ค)"""
+    if not voice_exists(name):
+        raise VoiceStoreError(f"voice '{name}' not found")
+    with open(_default_marker_path(), "w", encoding="utf-8") as f:
+        f.write(name + "\n")
+
+
+def is_protected(name: str) -> bool:
+    """True ถ้าลบ/rename ชื่อนี้ไม่ได้ — reserved literal (Liino) หรือเป็น
+    default voice ปัจจุบัน (ต้อง set-default ไปเสียงอื่นก่อนถึงจะลบ/rename ได้)
+    """
+    name = name.lower()
+    return name == FALLBACK_VOICE.lower() or name == get_default_voice()
 
 
 def voice_paths(name: str) -> tuple[str, str, str]:

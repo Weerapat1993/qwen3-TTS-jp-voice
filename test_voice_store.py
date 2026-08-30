@@ -150,6 +150,50 @@ def test_delete_voice_rejects(voices_dir):
         vs.delete_voice("missing")
 
 
+# ---------- get_default_voice / set_default_voice / is_protected (TTS-1010) ----------
+
+def test_get_default_voice_no_marker_falls_back(voices_dir):
+    assert vs.get_default_voice() == "liino"
+
+
+def test_set_default_voice_then_get(voices_dir):
+    _touch(voices_dir / "wyitz.wav", "w")
+    vs.set_default_voice("wyitz")
+    assert vs.get_default_voice() == "wyitz"
+    assert (voices_dir / ".default").read_text(encoding="utf-8").strip() == "wyitz"
+
+
+def test_set_default_voice_rejects_missing(voices_dir):
+    with pytest.raises(VoiceStoreError):
+        vs.set_default_voice("missing")
+
+
+def test_get_default_voice_marker_points_to_deleted_voice_falls_back(voices_dir):
+    _touch(voices_dir / "wyitz.wav", "w")
+    vs.set_default_voice("wyitz")
+    (voices_dir / "wyitz.wav").unlink()
+    assert vs.get_default_voice() == "liino"
+
+
+def test_is_protected_reserved_always_true(voices_dir):
+    assert vs.is_protected("liino") is True
+    assert vs.is_protected("LIINO") is True
+
+
+def test_is_protected_current_default(voices_dir):
+    _touch(voices_dir / "wyitz.wav", "w")
+    assert vs.is_protected("wyitz") is False
+    vs.set_default_voice("wyitz")
+    assert vs.is_protected("wyitz") is True
+
+
+def test_is_protected_non_default_non_reserved(voices_dir):
+    _touch(voices_dir / "wyitz.wav", "w")
+    _touch(voices_dir / "other.wav", "w")
+    vs.set_default_voice("wyitz")
+    assert vs.is_protected("other") is False
+
+
 # ---------- prepare_ref_audio ----------
 
 @requires_ffmpeg
