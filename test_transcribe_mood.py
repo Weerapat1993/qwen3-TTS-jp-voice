@@ -60,6 +60,14 @@ def test_detect_mood_thai_proud():
     assert detect_mood("ภูมิใจในตัวเธอมากเลย") == "proud"
 
 
+def test_detect_mood_thai_surprised_eh():
+    assert detect_mood("เอ๊ะ? เวทีสำหรับริโนะเหรอ?") == "surprised"
+
+
+def test_detect_mood_thai_excited_sparkle():
+    assert detect_mood("เหมือนประกายระยิบระยับแผ่ซ่านไปทั้งอก") == "excited"
+
+
 def test_detect_mood_english_angry_still_wins_over_pouty():
     # "furious" ยัง match angry (entry มาก่อน pouty)
     assert detect_mood("I am so furious right now") == "angry"
