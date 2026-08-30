@@ -16,7 +16,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **Voice Design** | Create a new voice from a text description (e.g. "deep narrator") | `main.py` (menu) |
 | **Custom Voice** | 9 built-in preset voices with emotion + speed control | `main.py` (menu) |
 | **Scriptable CLI** | Generate audio from a single flag-based command, no prompts | `qwen_clone_tts.py --text ...` |
-| **Stdin/file mode** | Read text from a file, auto-chunk long text, output one audio file | `qwen_clone_tts.py --stdin <in> <out>` |
+| **Stdin/file mode** | Read text from a file, switch mood mid-file via `[mood:xxx]` tags, output one audio file | `qwen_clone_tts.py --stdin <in> <out>` |
 | **WAV or MP3 output** | Generate MP3 directly via ffmpeg (`libmp3lame`) instead of WAV | `--mp3` flag |
 | **Background daemon** | Load the model once, serve requests over a Unix socket — skips the ~3-10s model load on every call | `tts_daemon.py` |
 | **FIFO job queue** | Daemon serializes concurrent requests; in-flight jobs are never cancelled | `tts_daemon.py` |
@@ -161,14 +161,18 @@ python qwen_clone_tts.py \
 | `--mood NAME` | no | Named tone preset (see mood list below) |
 | `--lang CODE` | no (default `auto`) | Output language for the TTS model. `auto` lets the model infer it from the text. Valid: `auto, chinese, english, french, german, italian, japanese, korean, portuguese, russian, spanish`. **Thai is not a model language — Thai text uses `auto`.** |
 
-**File / stdin mode** (reads text from a file, auto-chunks it, always uses the `Liino` voice):
+**File / stdin mode** (reads text from a file, supports `[mood:xxx]` tags to switch mood mid-file, always uses the `Liino` voice):
 
 ```bash
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.mp3 --mp3
 python qwen_clone_tts.py --stdin path/to/input.txt path/to/output.wav --mood excited
 python qwen_clone_tts.py --stdin path/to/input.ja.txt out.wav --lang japanese
+
+# input.txt may contain: [mood:excited]Hi there! [mood:sleepy]So tired now...
 ```
+
+Untagged text is still capped at 300 chars (same limit as `--text`). Insert one or more `[mood:xxx]` tags (`xxx` must be a key from the mood list below) to switch tone mid-file — each tagged segment is generated separately and stitched together with `ffmpeg`, with no overall length limit. An unknown mood key in a tag fails the whole file with `ERROR: unknown mood(s) in --stdin tag: ...` before any audio is generated.
 
 Exit code `0` = success (`OK <path>` printed to stdout). Non-zero = failure (`ERROR: ...` printed to stderr).
 
@@ -403,7 +407,7 @@ omitted.
 | `mlx_audio not found` | Run `source .venv/bin/activate` first |
 | `Model not found` | Check model folder names match exactly |
 | Audio won't play | Check macOS sound output settings |
-| `text is N chars — max is 300` | Split the text yourself; long-text auto-chunking is disabled |
+| `text is N chars — max is 300` | Split with `[mood:xxx]` tags for `--stdin`, or split the text yourself for `--text` |
 | Daemon not picked up by client | Check `TTS_DAEMON_SOCK` matches on both daemon and client; confirm the daemon process is running |
 
 ---
