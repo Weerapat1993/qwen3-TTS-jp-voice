@@ -44,6 +44,54 @@ def test_detect_mood_earlier_entry_wins():
     assert detect_mood("555 แต่ก็เศร้านะ") == "giggle"
 
 
+def test_detect_mood_thai_pouty():
+    assert detect_mood("งอนแล้วนะ ไม่คุยด้วย") == "pouty"
+
+
+def test_detect_mood_english_worried():
+    assert detect_mood("I am so worried about tomorrow") == "worried"
+
+
+def test_detect_mood_japanese_shy():
+    assert detect_mood("照れくさいな、もう") == "shy"
+
+
+def test_detect_mood_thai_proud():
+    assert detect_mood("ภูมิใจในตัวเธอมากเลย") == "proud"
+
+
+def test_detect_mood_thai_surprised_eh():
+    assert detect_mood("เอ๊ะ? เวทีสำหรับริโนะเหรอ?") == "surprised"
+
+
+def test_detect_mood_thai_excited_sparkle():
+    assert detect_mood("เหมือนประกายระยิบระยับแผ่ซ่านไปทั้งอก") == "excited"
+
+
+def test_detect_mood_english_angry_still_wins_over_pouty():
+    # "furious" ยัง match angry (entry มาก่อน pouty)
+    assert detect_mood("I am so furious right now") == "angry"
+
+
+def test_detect_mood_japanese_excited_shine():
+    # keyword "輝" (TTS-1007 tuning) — จับ 輝く/輝いてる ได้
+    assert detect_mood("どこにいたって君が一番輝くスターだ") == "excited"
+
+
+def test_detect_mood_japanese_excited_kirameki():
+    assert detect_mood("きらめきが胸に広がってく") == "excited"
+
+
+def test_detect_mood_earlier_entry_wins_over_shine():
+    # 輝 อยู่ใน excited (ท้าย ๆ) — sad/gentle ที่มาก่อนต้องชนะเมื่อมีทั้งคู่
+    assert detect_mood("あんなに輝いてたのに、今は悲しい") == "sad"
+
+
+def test_detect_mood_thai_surprised_eh_not_pouty():
+    # "เอ๊ะ" (surprised) มาหลัง pouty — ข้อความไม่มี keyword pouty จึงเป็น surprised
+    assert detect_mood("เอ๊ะ เวทีสำหรับริโนะเหรอ") == "surprised"
+
+
 def test_every_keyword_mood_has_canonical_emoji():
     for _needles, mood in MOOD_KEYWORDS:
         assert mood in MOOD_EMOJI, f"{mood!r} has no MOOD_EMOJI entry"

@@ -65,6 +65,14 @@ MOOD_PRESETS: dict[str, str] = {
     "storyteller": "Warm expressive storyteller voice, like narrating a "
                    "bedtime story. Rich intonation, gentle suspense, "
                    "slowing down at key moments, inviting the listener in.",
+    "pouty":     "Sulky, reluctant, mildly petulant young female voice. "
+                 "Clipped and flat, slightly dragging, not genuinely angry.",
+    "shy":       "Shy, bashful, hesitant young female voice. Soft and quiet, "
+                 "with small nervous pauses.",
+    "proud":     "Proud, pleased, self-assured young female voice. Warm and "
+                 "steady, chin-up confidence.",
+    "worried":   "Worried, anxious, uneasy young female voice. Slightly "
+                 "hurried and tense, with uneven breath.",
 }
 
 

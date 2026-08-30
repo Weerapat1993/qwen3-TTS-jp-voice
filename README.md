@@ -262,7 +262,7 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
 - **`/say text:<text>`** — joins the voice channel of the command user and speaks `<text>` with the Liino voice. `text` is meant for a single line (Discord desktop can't type a newline in a slash field).
 - **`/say file:<x.txt>`** — upload a UTF-8 `.txt` attachment (≤ 100 KB) for multi-line input: one line per sentence, real newlines in the file. Same pipeline as `text` (emoji auto-mood, per-line limit, etc.).
 - **You must supply exactly one of `text:` or `file:`** — neither or both is rejected with an ephemeral error before anything is queued. A `file:` that isn't `.txt`, is over 100 KB, or isn't valid UTF-8 is rejected the same way.
-- **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, etc.), picked from the `mood` choice dropdown. Works with both `text:` and `file:`.
+- **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, `pouty`, `shy`, `proud`, `worried`, etc.), picked from the `mood` choice dropdown. Works with both `text:` and `file:`.
 - **`language:<code>`** — pin the TTS output language (`japanese`, `english`, `chinese`, …) so text isn't mispronounced in the wrong language. Leave it unset for `auto` (the model infers language from the text; Thai always uses `auto`). Applies to every line of a `text:` or `file:` request.
 - **Multi-line handling** — each line is spoken one per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped. There is no cap on the number of lines (longer messages just take longer to generate through the daemon's FIFO queue).
 - **Ephemeral replies** — usage hints and every error (over-limit line, no voice channel, daemon down, etc.) are sent as an ephemeral reply visible only to the command user. On success the queue confirmation (`🔊 เข้าคิวแล้ว N บรรทัด`) is posted to the channel.
@@ -280,6 +280,10 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
   | `gentle` | 🥺 🤗 💗 |
   | `bored` | 😑 😐 🙄 |
   | `storyteller` | 📖 📚 🧚 |
+  | `pouty` | 😒 😾 🫤 |
+  | `shy` | 😳 🫣 |
+  | `proud` | 😌 😏 |
+  | `worried` | 😟 😧 😦 |
 
 - The `MAX_CHARS` (300) limit applies **per line** (measured after emoji removal and trimming), matching the daemon's own per-request limit. If any single line is over 300 chars, the whole message is rejected immediately with a readable error naming the offending line number, and nothing is queued. The combined length of all lines is not limited.
 - **Atomic batch** — if any line fails to generate (daemon down mid-batch), no line is played and the temp files are cleaned up.
