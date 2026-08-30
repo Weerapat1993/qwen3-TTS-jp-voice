@@ -10,6 +10,8 @@ kanban-plugin: board
 
 ## PLAN
 
+- [TTS-1012](tasks/TTS-1012.md): Inline mood tag ([mood:xxx]) support for --stdin batch text
+
 ## INPROGRESS
 
 ## REVIEW
