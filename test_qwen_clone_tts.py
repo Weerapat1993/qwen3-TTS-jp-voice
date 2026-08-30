@@ -2,7 +2,9 @@
 + daemon out_path abspath (TTS-1008)"""
 import json
 import os
+import shutil
 import socket
+import subprocess
 
 import pytest
 
@@ -143,6 +145,107 @@ class _FakeSock:
 
     def close(self):
         pass
+
+
+def test_run_multi_sends_per_segment_instruct_via_daemon(monkeypatch, tmp_path):
+    """_run_multi ต้องส่ง instruct ที่ต่างกันต่อ segment ผ่าน daemon
+    (quiet=True ทุกครั้ง) แล้วเรียก ffmpeg concat ครั้งเดียวรวมทุก part"""
+    sent_payloads = []
+
+    class _SeqFakeSock:
+        def __init__(self):
+            self._replied = False
+
+        def settimeout(self, _t):
+            pass
+
+        def connect(self, _p):
+            pass
+
+        def sendall(self, data):
+            sent_payloads.append(json.loads(data.decode("utf-8").strip()))
+
+        def recv(self, _n):
+            if self._replied:
+                return b""
+            self._replied = True
+            return (json.dumps(
+                {"ok": True, "out_path": "/ignored.wav", "gen_s": 0.1}) + "\n"
+            ).encode("utf-8")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(qwen_clone_tts.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: _SeqFakeSock())
+    monkeypatch.setattr(shutil, "which", lambda _n: "/usr/bin/ffmpeg")
+
+    concat_calls = []
+
+    class _FakeCompleted:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        concat_calls.append(cmd)
+        return _FakeCompleted()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    out_path = str(tmp_path / "out.wav")
+    segments = [("excited", "Hello there"), ("sleepy", "Good night")]
+    rc = qwen_clone_tts._run_multi("Liino", segments, None, out_path)
+
+    assert rc == 0
+    assert len(sent_payloads) == 2
+    assert sent_payloads[0]["instruct"] == MOOD_PRESETS["excited"]
+    assert sent_payloads[1]["instruct"] == MOOD_PRESETS["sleepy"]
+    assert sent_payloads[0]["text"] == "Hello there"
+    assert sent_payloads[1]["text"] == "Good night"
+    assert len(concat_calls) == 1
+    assert "concat" in concat_calls[0]
+
+
+def test_run_multi_aborts_whole_run_if_daemon_fails_mid_job(monkeypatch, tmp_path):
+    """job แรกสำเร็จผ่าน daemon, job ที่สองล้มเหลว -> ทั้งรันต้อง fail
+    ไม่ยอมให้ ffmpeg concat ไฟล์บางส่วนออกมา"""
+    call_count = {"n": 0}
+
+    class _FlakySock:
+        def settimeout(self, _t):
+            pass
+
+        def connect(self, _p):
+            pass
+
+        def sendall(self, data):
+            pass
+
+        def recv(self, _n):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return (json.dumps(
+                    {"ok": True, "out_path": "/x.wav", "gen_s": 0.1}) + "\n"
+                ).encode("utf-8")
+            return b""  # job ที่ 2 เป็นตันไป: daemon หลุด/ไม่ตอบ
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(qwen_clone_tts.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: _FlakySock())
+    monkeypatch.setattr(shutil, "which", lambda _n: "/usr/bin/ffmpeg")
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("ffmpeg concat must not run after a job failure")
+
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+    out_path = str(tmp_path / "out.wav")
+    segments = [("excited", "one"), ("sleepy", "two")]
+    rc = qwen_clone_tts._run_multi("Liino", segments, None, out_path)
+
+    assert rc == 1
 
 
 def test_try_daemon_sends_absolute_out_path(monkeypatch, capsys):

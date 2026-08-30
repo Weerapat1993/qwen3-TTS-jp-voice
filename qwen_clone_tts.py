@@ -359,6 +359,116 @@ def _run(voice: str, text: str, out_path: str, instruct: str | None,
     return 0
 
 
+def _run_multi(voice: str, segments: list[tuple[str | None, str]],
+               voice_default: str | None, out_path: str,
+               mp3: bool = False, lang: str = "auto") -> int:
+    """generate เสียงจากหลาย mood segment (2 ขึ้นไป) แล้ว concat เป็นไฟล์เดียว
+    ด้วย ffmpeg — ใช้เมื่อ --stdin มี [mood:xxx] tag ทำให้แบ่งได้มากกว่า 1 segment
+    แต่ละ segment ถูก chunk_text() ต่ออีกชั้นถ้ายาวเกิน MAX_CHARS
+    job ใดล้มเหลว -> ทั้งรัน fail ทันที ไม่มีการเล่นเสียงบางส่วน"""
+    ref_audio = os.path.join(VOICES_DIR, f"{voice}.wav")
+    if not os.path.exists(ref_audio):
+        print(f"ERROR: ref voice not found: {ref_audio}", file=sys.stderr)
+        return 1
+
+    jobs: list[tuple[str | None, str]] = []
+    for mood_key, seg_text in segments:
+        try:
+            instruct = resolve_instruct(mood_key, None, voice_default)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        for chunk in chunk_text(seg_text):
+            jobs.append((instruct, chunk))
+    if not jobs:
+        print("ERROR: no text content after mood-tag parsing", file=sys.stderr)
+        return 1
+
+    import shutil
+    import subprocess
+    if shutil.which("ffmpeg") is None:
+        print("ERROR: ffmpeg not found for concat", file=sys.stderr)
+        return 1
+
+    tmpdir = tempfile.mkdtemp(prefix="qwen_clone_chunks_")
+    part_paths: list[str] = []
+    load_s = 0.0
+    try:
+        part0 = os.path.join(tmpdir, "part_000.wav")
+        instruct0, text0 = jobs[0]
+        t0 = time.time()
+        use_daemon = _try_daemon(text0, part0, instruct0, voice, fmt="wav",
+                                 lang=lang, quiet=True)
+        t1 = time.time()
+        if use_daemon:
+            part_paths.append(part0)
+            for i, (instruct, text) in enumerate(jobs[1:], start=1):
+                part = os.path.join(tmpdir, f"part_{i:03d}.wav")
+                if not _try_daemon(text, part, instruct, voice, fmt="wav",
+                                   lang=lang, quiet=True):
+                    print(f"ERROR: daemon failed on job {i} of {len(jobs)}",
+                          file=sys.stderr)
+                    return 1
+                part_paths.append(part)
+        else:
+            from mlx_audio.tts.utils import load_model
+            from mlx_audio.tts.generate import generate_audio
+            ref_text = None
+            txt_path = os.path.join(VOICES_DIR, f"{voice}.txt")
+            if os.path.exists(txt_path):
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    ref_text = f.read().strip()
+            model = load_model(MODEL_PATH)
+            load_s = time.time() - t0
+            t1 = time.time()
+            for i, (instruct, text) in enumerate(jobs):
+                part = os.path.join(tmpdir, f"part_{i:03d}.wav")
+                with contextlib.redirect_stderr(io.StringIO()), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    generate_audio(model=model, text=text,
+                                   ref_audio=ref_audio, ref_text=ref_text,
+                                   instruct=instruct, lang_code=lang,
+                                   output_path=part)
+                if os.path.isdir(part):
+                    cands = sorted(
+                        (os.path.join(part, f) for f in os.listdir(part)
+                         if f.endswith((".wav", ".mp3"))),
+                        key=os.path.getmtime)
+                    if not cands:
+                        print(f"ERROR: no audio for job {i}", file=sys.stderr)
+                        return 1
+                    part = cands[-1]
+                elif not os.path.exists(part):
+                    print(f"ERROR: job {i} output missing", file=sys.stderr)
+                    return 1
+                part_paths.append(part)
+
+        list_file = os.path.join(tmpdir, "list.txt")
+        with open(list_file, "w", encoding="utf-8") as f:
+            for p in part_paths:
+                f.write(f"file '{p}'\n")
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "concat", "-safe", "0", "-i", list_file,
+             "-ar", "24000", "-ac", "1", out_path],
+            capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(out_path):
+            print(f"ERROR: ffmpeg concat failed: {r.stderr}", file=sys.stderr)
+            return 1
+        gen_s = time.time() - t1
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    final_out = out_path
+    if mp3:
+        final_out = _convert_to_mp3(out_path)
+    print(f"OK {final_out}")
+    print(f"TIMING load={load_s:.1f}s gen={gen_s:.1f}s jobs={len(jobs)}",
+          file=sys.stderr)
+    return 0
+
+
 def main() -> int:
     # โหมด Hermes provider: --stdin <input_path> <output_path>
     if "--stdin" in sys.argv:
