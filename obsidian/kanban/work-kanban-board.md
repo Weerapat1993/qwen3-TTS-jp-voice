@@ -10,9 +10,9 @@ kanban-plugin: board
 
 ## PLAN
 
-- [TTS-1006](tasks/TTS-1006.md): /say — เพิ่ม language override กัน TTS ออกเสียงผิดภาษา (lang_code ผ่าน daemon protocol)
-
 ## INPROGRESS
+
+- [TTS-1006](tasks/TTS-1006.md): /say — เพิ่ม language override กัน TTS ออกเสียงผิดภาษา (lang_code ผ่าน daemon protocol)
 
 ## REVIEW
 
