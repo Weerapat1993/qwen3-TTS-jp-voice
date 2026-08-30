@@ -409,11 +409,17 @@ async def transcribe(interaction: discord.Interaction,
         txt = discord.File(
             io.BytesIO(body.encode("utf-8")),
             filename=f"transcribe_{interaction.id}.txt")
+        no_ping = discord.AllowedMentions.none()
+        # แทรก zero-width space กัน ``` ในเนื้อความทะลุ code fence (ไฟล์แนบใช้ body เดิม);
+        # allowed_mentions=none กัน @mention จาก transcript
+        safe_body = body.replace("```", "`​`​`")
         if len(body) <= TRANSCRIBE_INLINE_MAX:
-            await interaction.channel.send(f"```\n{body}\n```", file=txt)
+            await interaction.channel.send(
+                f"```\n{safe_body}\n```", file=txt, allowed_mentions=no_ping)
         else:
             await interaction.channel.send(
-                "📝 ถอดเสียงเสร็จแล้ว (ข้อความยาว — ดูไฟล์แนบ)", file=txt)
+                "📝 ถอดเสียงเสร็จแล้ว (ข้อความยาว — ดูไฟล์แนบ)", file=txt,
+                allowed_mentions=no_ping)
         await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
         print(f"discord_say_bot: transcribe guild={interaction.guild.id} "
               f"bytes={file.size} dur_s={duration:.1f} lines={len(lines)} "
