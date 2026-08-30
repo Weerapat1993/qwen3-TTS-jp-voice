@@ -6,6 +6,8 @@ kanban-plugin: board
 
 ## BACKLOG
 
+- [TTS-1004](tasks/TTS-1004.md): เปลี่ยน ?say prefix command เป็น slash command /say
+
 ## TODO
 
 ## PLAN
