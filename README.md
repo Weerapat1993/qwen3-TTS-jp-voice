@@ -220,6 +220,8 @@ Send one JSON object + `\n` over the Unix socket; receive one JSON response + `\
 
 `lang` is optional and defaults to `"auto"` (omitting it is identical to sending `"auto"`). Valid values are `auto` plus the model's language codes: `chinese, english, french, german, italian, japanese, korean, portuguese, russian, spanish`. An unknown code returns `ok: false`.
 
+`out_path` **must be an absolute path**. The daemon's working directory is not the caller's (a `launchd`-run daemon has cwd `/`), so a relative path would be written in the wrong place — the daemon rejects it with `ok: false` / `error: "out_path must be absolute"`. The `qwen_clone_tts.py` client handles this automatically by `os.path.abspath()`-ing `out_path` before sending.
+
 The `qwen_clone_tts.py` client already implements this protocol — talk to the daemon directly only if you're building a new client.
 
 ### Priority (nice / Process QoS)

@@ -8,11 +8,11 @@ kanban-plugin: board
 
 ## TODO
 
-- [TTS-1008](tasks/TTS-1008.md): daemon fast path ล้มเหลว "no audio produced" เมื่อ out_path เป็น relative (cwd ของ launchd = /)
-
 ## PLAN
 
 ## INPROGRESS
+
+- [TTS-1008](tasks/TTS-1008.md): daemon fast path ล้มเหลว "no audio produced" เมื่อ out_path เป็น relative (cwd ของ launchd = /)
 
 ## REVIEW
 

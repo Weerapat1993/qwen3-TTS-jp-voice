@@ -165,6 +165,9 @@ def _try_daemon(text: str, out_path: str, instruct: str | None,
     import socket as _socket
     if not os.path.exists(SOCK_PATH):
         return False
+    # daemon cwd ไม่ใช่ cwd ของผู้ใช้ (launchd = /) — ส่ง absolute path เสมอ
+    # ให้ daemon เขียนไฟล์ที่เดียวกับที่ผู้ใช้ตั้งใจ
+    out_path = os.path.abspath(out_path)
     try:
         sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
         # connect เร็ว (daemon ควรตอบทันทีว่าพร้อมหรือไม่) แต่รอผล gen ได้นาน
