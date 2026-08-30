@@ -3,7 +3,10 @@
 
 Protocol (JSON บรรทัดเดียว จบด้วย newline):
     request : {"text": str, "instruct": str|null, "out_path": str, "voice": str?,
-               "format": "wav"|"mp3"?}
+               "format": "wav"|"mp3"?, "lang": str?}
+               lang = "auto" (default) หรือ code ที่โมเดลรองรับ
+               (japanese, english, chinese, ...) — ดู qwen_clone_tts.LANG_CODES;
+               ไม่ส่ง lang = "auto" (backward compatible)
     response: {"ok": bool, "out_path": str, "gen_s": float,
                "error": str|null, "cached": bool, "queue_wait_s": float,
                "format": "wav"|"mp3"}
@@ -42,7 +45,7 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
 from qwen_clone_tts import (  # noqa: E402
-    DEFAULT_INSTRUCT, MAX_CHARS, MODEL_PATH, VOICES_DIR, chunk_text)
+    DEFAULT_INSTRUCT, LANG_CODES, MAX_CHARS, MODEL_PATH, VOICES_DIR, chunk_text)
 
 SOCK_PATH = os.environ.get("TTS_DAEMON_SOCK", "/tmp/qwen_tts_daemon.sock")
 CACHE_DIR = os.environ.get("TTS_CACHE_DIR", os.path.expanduser("~/.cache/qwen_tts"))
@@ -88,9 +91,15 @@ def _unload_model(holder: dict) -> None:
         pass
 
 
-def _cache_key(text: str, instruct: str | None, voice: str) -> str:
+def _cache_key(text: str, instruct: str | None, voice: str,
+               lang: str = "auto") -> str:
     h = hashlib.sha256()
-    h.update(f"{voice}\x00{text}\x00{instruct or ''}".encode("utf-8"))
+    base = f"{voice}\x00{text}\x00{instruct or ''}"
+    # lang เพิ่มเข้า key เฉพาะเมื่อไม่ใช่ auto — cache ที่มีอยู่ก่อน TTS-1006
+    # (ทั้งหมดคือ auto โดยปริยาย) จึงยัง hit ได้ ไม่ invalidate
+    if lang and lang != "auto":
+        base += f"\x00{lang}"
+    h.update(base.encode("utf-8"))
     return h.hexdigest()
 
 
@@ -155,7 +164,7 @@ def _resolve_audio_path(path: str) -> str | None:
 
 
 def _generate(model_holder, ref_audio: str, ref_text: str | None, text: str,
-              instruct: str | None, out_path: str) -> float:
+              instruct: str | None, out_path: str, lang: str = "auto") -> float:
     """generate เสียง 1 ชิ้น (chunk เองถ้ายาว) คืนเวลา gen เป็นวินาที
 
     model_holder คือ dict {"model": ...} — ถ้า idle-unload ไปแล้วจะโหลดใหม่
@@ -180,7 +189,8 @@ def _generate(model_holder, ref_audio: str, ref_text: str | None, text: str,
                         contextlib.redirect_stdout(io.StringIO()):
                     generate_audio(model=model, text=chunk,
                                    ref_audio=ref_audio, ref_text=ref_text,
-                                   instruct=instruct, output_path=part)
+                                   instruct=instruct, lang_code=lang,
+                                   output_path=part)
                 final = _resolve_audio_path(part)
                 if final is None:
                     raise RuntimeError(f"chunk {i} produced no audio")
@@ -209,7 +219,7 @@ def _generate(model_holder, ref_audio: str, ref_text: str | None, text: str,
                     contextlib.redirect_stdout(cap_out):
                 generate_audio(model=model, text=text, ref_audio=ref_audio,
                                ref_text=ref_text, instruct=instruct,
-                               output_path=out_path)
+                               lang_code=lang, output_path=out_path)
             final = _resolve_audio_path(out_path)
             if final is not None:
                 break
@@ -244,6 +254,13 @@ def handle_request(model_holder, req: dict, queue_wait_s: float = 0.0) -> dict:
     fmt = req.get("format", "wav")
     if fmt not in ("wav", "mp3"):
         fmt = "wav"
+    lang = req.get("lang", "auto")
+    if lang not in LANG_CODES:
+        return {"ok": False, "out_path": out_path or "", "gen_s": 0.0,
+                "error": f"unknown lang '{lang}' — choices: "
+                         f"{', '.join(LANG_CODES)}",
+                "cached": False, "queue_wait_s": round(queue_wait_s, 2),
+                "format": fmt}
     if len(text) > MAX_CHARS:
         # ข้อความยาวปิด feature แล้ว — ปฏิเสธพร้อม error ชัดเจน
         return {"ok": False, "out_path": out_path or "",
@@ -252,7 +269,7 @@ def handle_request(model_holder, req: dict, queue_wait_s: float = 0.0) -> dict:
                          f"(long-text chunking is disabled)",
                 "cached": False, "queue_wait_s": round(queue_wait_s, 2),
                 "format": fmt}
-    log_event("request", text_len=len(text),
+    log_event("request", text_len=len(text), lang=lang,
               queue_wait_s=round(queue_wait_s, 2))
 
     def resp(ok: bool, gen_s: float, error: str | None,
@@ -285,7 +302,7 @@ def handle_request(model_holder, req: dict, queue_wait_s: float = 0.0) -> dict:
 
     # cache hit -> ใช้ไฟล์ cache ทันที (key เป็น wav; mp3 แปลงจาก wav cache)
     os.makedirs(CACHE_DIR, exist_ok=True)
-    key = _cache_key(text, instruct, voice)
+    key = _cache_key(text, instruct, voice, lang)
     cached_wav = os.path.join(CACHE_DIR, key + ".wav")
     out_ext = os.path.splitext(out_path)[1].lower()
     # mp3 จะ generate เป็น wav ใน out_path ก่อน (ถ้าขอ .mp3) แล้วแปลงทีหลัง
@@ -309,7 +326,7 @@ def handle_request(model_holder, req: dict, queue_wait_s: float = 0.0) -> dict:
 
     try:
         gen_s = _generate(model_holder, ref_audio, ref_text, text, instruct,
-                          gen_path)
+                          gen_path, lang)
     except Exception as e:  # noqa: BLE001
         return resp(False, 0.0, str(e))
     try:
