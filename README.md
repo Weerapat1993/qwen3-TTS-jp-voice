@@ -186,6 +186,21 @@ Background service that loads the model **once** and serves generation requests 
 
 Or install as a launchd background service — see `launchd/com.liino.qwen-tts-daemon.plist` (edit paths for your install, then `launchctl load` it; you must reinstall the service yourself after editing the plist).
 
+### Restart it
+
+`./restart_daemon.sh` wraps the `launchctl` incantations:
+
+```bash
+./restart_daemon.sh              # kickstart -k — pick up new tts_daemon.py code
+./restart_daemon.sh --reinstall  # copy the repo plist into ~/Library/LaunchAgents/ then unload/load
+                                 #   (needed whenever the plist changes — e.g. WorkingDirectory, env, Nice)
+./restart_daemon.sh --manual     # unload the launchd agent, run tts_daemon.py in the foreground with live logs
+./restart_daemon.sh --clear-cache# wipe TTS_CACHE_DIR before restarting
+./restart_daemon.sh --verify     # after restart, fire one real request and fail unless it hits the daemon fast path
+```
+
+Flags combine (`./restart_daemon.sh --reinstall --verify`). The script honours `TTS_DAEMON_SOCK` / `TTS_CACHE_DIR` / `TTS_TELEMETRY_LOG` overrides and waits (up to 20s) for the socket to come back after the model reloads. `--manual` does not re-load the agent for you — it prints the `launchctl load` command to run when you're done.
+
 ### Behavior
 
 - **FIFO queue** — requests are served one at a time, in order. A job that is already generating is never cancelled mid-flight.
