@@ -329,12 +329,19 @@ async def say(interaction: discord.Interaction, text: str | None = None,
 @app_commands.guild_only()
 @app_commands.describe(
     file="ไฟล์เสียง .mp3 หรือ .wav (≤ 20 MB, ≤ 10 นาที)",
-    mood="บังคับ mood ทุกบรรทัด (ไม่เลือก = auto จากข้อความ)")
-@app_commands.choices(mood=[
-    app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)])
+    mood="บังคับ mood ทุกบรรทัด (ไม่เลือก = auto จากข้อความ)",
+    language="ภาษาของเสียง (ไม่เลือก = ตรวจอัตโนมัติ, ใช้ภาษาเดียวทั้งไฟล์)")
+@app_commands.choices(
+    mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)],
+    language=[
+        app_commands.Choice(name="ไทย", value="th"),
+        app_commands.Choice(name="ญี่ปุ่น", value="ja"),
+        app_commands.Choice(name="อังกฤษ", value="en"),
+    ])
 async def transcribe(interaction: discord.Interaction,
                      file: discord.Attachment,
-                     mood: str | None = None) -> None:
+                     mood: str | None = None,
+                     language: str | None = None) -> None:
     # pre-defer validation — error ทุกจุดตรงนี้เป็น ephemeral, ไม่โพสต์ลงแชท
     if not file.filename.lower().endswith((".mp3", ".wav")):
         await interaction.response.send_message(
@@ -377,7 +384,7 @@ async def transcribe(interaction: discord.Interaction,
 
         t0 = time.time()
         try:
-            lines = await asyncio.to_thread(run_stt, audio_path)
+            lines = await asyncio.to_thread(run_stt, audio_path, language)
         except Exception as e:  # noqa: BLE001
             print(f"discord_say_bot: transcribe STT error: {e}",
                   file=sys.stderr, flush=True)
@@ -410,7 +417,8 @@ async def transcribe(interaction: discord.Interaction,
         await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
         print(f"discord_say_bot: transcribe guild={interaction.guild.id} "
               f"bytes={file.size} dur_s={duration:.1f} lines={len(lines)} "
-              f"stt_s={stt_s:.2f} model={WHISPER_MODEL} explicit_mood={mood}",
+              f"stt_s={stt_s:.2f} model={WHISPER_MODEL} lang={language or 'auto'} "
+              f"explicit_mood={mood}",
               file=sys.stderr, flush=True)
     finally:
         try:

@@ -299,13 +299,17 @@ Upload an `.mp3` or `.wav` and the bot transcribes it locally with Whisper
 (`mlx-whisper`, no cloud), tags each line with a mood emoji, and replies with a
 `.txt` attachment you can drop straight into `/say file:`.
 
-- **`/transcribe file:<audio> [mood:<preset>]`** — `file` must be `.mp3` or
-  `.wav`, ≤ 20 MB and ≤ 10 minutes; anything else is rejected with an ephemeral
-  error and nothing is posted.
+- **`/transcribe file:<audio> [mood:<preset>] [language:<th|ja|en>]`** — `file`
+  must be `.mp3` or `.wav`, ≤ 20 MB and ≤ 10 minutes; anything else is rejected
+  with an ephemeral error and nothing is posted.
+- **`language:`** — leave it unset (default) and Whisper auto-detects the spoken
+  language from the start of the clip and uses that one language for the whole
+  file (prevents mixed-language output, e.g. a Japanese clip partly transcribed
+  as Thai). Pick `th` / `ja` / `en` to force a language.
 - Each Whisper segment becomes one line. A per-line keyword heuristic (Thai +
-  English) picks a mood and prefixes the matching emoji (`😄`, `😢`, `🤫`, …) —
-  the same emoji `/say` reads back as auto-mood. Lines with no match get no
-  prefix.
+  English + Japanese) picks a mood and prefixes the matching emoji (`😄`, `😢`,
+  `🤫`, …) — the same emoji `/say` reads back as auto-mood. Lines with no match
+  get no prefix.
 - **`mood:<preset>`** overrides the mood for **every** line. `default` and
   `long` have no emoji, so choosing them emits lines with no prefix.
 - The reply is always a `.txt` attachment. When the text is ≤ 1800 characters it

@@ -23,6 +23,22 @@ def test_detect_mood_no_keyword_returns_none():
     assert detect_mood("วันนี้อากาศดีนะ ไปเดินเล่นกัน") is None
 
 
+def test_detect_mood_japanese_excited():
+    assert detect_mood("トゥインクルのライブ 始まりよー!") == "excited"
+
+
+def test_detect_mood_japanese_surprised():
+    assert detect_mood("へぇー? まさか") == "surprised"
+
+
+def test_detect_mood_japanese_sad():
+    assert detect_mood("ごめん、ちょっと悲しい") == "sad"
+
+
+def test_detect_mood_japanese_no_keyword_returns_none():
+    assert detect_mood("こんな衣装初めて") is None
+
+
 def test_detect_mood_earlier_entry_wins():
     # "555" (giggle, entry 0) มาก่อน "เศร้า" (sad, entry 1)
     assert detect_mood("555 แต่ก็เศร้านะ") == "giggle"

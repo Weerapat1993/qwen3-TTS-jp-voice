@@ -34,8 +34,12 @@ def probe_duration(audio_path: str) -> float:
         raise RuntimeError(f"ffprobe returned no duration: {out.stdout!r}") from e
 
 
-def transcribe(audio_path: str) -> list[str]:
+def transcribe(audio_path: str, language: str | None = None) -> list[str]:
     """ถอดเสียงไฟล์เป็น list ของข้อความต่อ segment (ตัด segment ว่างทิ้ง คงลำดับ)
+
+    language=None -> ให้ Whisper เดาภาษาเองจากช่วงต้นของเสียง (auto-detect) แล้ว
+    ใช้ภาษานั้นทั้งไฟล์ — กันผลปนภาษา เช่นไฟล์ญี่ปุ่นถูกถอดเป็นไทยบางบรรทัด
+    ระบุ code เช่น "th"/"ja"/"en" -> บังคับใช้ภาษานั้น
 
     import mlx_whisper ในฟังก์ชัน เพื่อไม่ให้การ import โมดูลนี้ (เช่นตอน test
     probe_duration) ลาก mlx เข้ามาโหลดช้า
@@ -43,8 +47,10 @@ def transcribe(audio_path: str) -> list[str]:
     """
     import mlx_whisper
 
-    result = mlx_whisper.transcribe(
-        audio_path, path_or_hf_repo=WHISPER_MODEL, language="th")
+    kwargs: dict = {"path_or_hf_repo": WHISPER_MODEL}
+    if language:
+        kwargs["language"] = language
+    result = mlx_whisper.transcribe(audio_path, **kwargs)
     lines: list[str] = []
     for seg in result.get("segments", []):
         text = (seg.get("text") or "").strip()
