@@ -2,34 +2,30 @@
 
 ใช้ไฟล์นี้เป็น workflow กลางเมื่อสั่ง AI ให้ทำ ticket ใน `obsidian/kanban/tasks/`
 
-## Skill Discovery (multi-tool)
-
-Skill instructions ตัวจริงอยู่ที่เดียวคือ `.claude/skills/kanban/SKILL.md` (+ `cmd/*.md`) ห้ามแก้ไข copy ซ้ำที่อื่น
-
-- Claude Code อ่าน `.claude/skills/kanban/` ตรง ๆ
-- opencode อ่าน `.claude/skills/<name>/SKILL.md` ได้เองอยู่แล้ว (compat path ในตัว) ไม่ต้องเพิ่มอะไร
-- codex ไม่รู้จัก `.claude/skills` มันมองหาแค่ `.agents/skills/<name>/SKILL.md` เท่านั้น เลยมี `.agents/skills/kanban` เป็น symlink ชี้กลับไปที่ `.claude/skills/kanban` (Codex resolve symlink ได้) ถ้าย้าย/ลบ skill ต้นทางต้องอัปเดต symlink นี้ด้วย
-
 ## Product-Level Reference
 
-โปรเจกต์นี้ไม่มี `prd.md` กลาง ใช้ `README.md` (root) เป็นแหล่งอ้างอิงภาพรวมของ scope, CLI reference, daemon protocol/config และ troubleshooting; `README_HERMES.md` (root) เป็นแหล่งอ้างอิงของ Hermes CLI / MCP bridge integration ที่แยกจาก TTS core flow ไม่มี `AGENTS.md` ในโปรเจกต์นี้
+โปรเจกต์นี้ไม่มี `prd.md` กลาง ใช้ `README.md` (root), `CLAUDE.md` (root) และ `README_HERMES.md` (root) เป็นแหล่งอ้างอิงภาพรวมของ scope, CLI reference, daemon protocol/config, Discord bot และ environment variables แทน โปรเจกต์นี้ไม่มี `AGENTS.md`, plugin system, permission system, database, หรือ web panel — entry point เป็น single-file script ที่ root ล้วน (`main.py`, `qwen_clone_tts.py`, `tts_daemon.py`, `tune_voice.py`, `discord_say_bot.py`, `say_moods.py`, `transcribe_mood.py`, `stt_transcribe.py`) ไม่มี `src/` package layout
 
-ต้องอ่าน `README.md` เมื่อ ticket หรือคำสั่งเกี่ยวข้องกับ:
+ต้องอ่าน `CLAUDE.md`/`README.md` (และ `README_HERMES.md` ถ้าแตะ `--stdin`/daemon protocol) เมื่อ ticket หรือคำสั่งเกี่ยวข้องกับ:
 
-- เพิ่ม/แก้ CLI flag ใน `main.py` หรือ `qwen_clone_tts.py`
-- แก้ daemon protocol, queue, cache, หรือ env var ใน `tts_daemon.py`
-- เพิ่ม script entry point ใหม่ที่ผู้ใช้เรียกตรง (`tune_voice.py` เป็นต้น)
-- แก้ behavior ที่กระทบ backward compatibility ระหว่าง `qwen_clone_tts.py` กับ daemon
+- เพิ่ม/เปลี่ยน CLI flag หรือ behavior ของ `qwen_clone_tts.py` หรือ `main.py`
+- แก้ daemon protocol, FIFO queue, queue timeout, cache key, idle-unload, หรือ telemetry ใน `tts_daemon.py` (protocol hand-implement สองฝั่ง: `_try_daemon()` ใน `qwen_clone_tts.py` กับ `handle_request()` ใน `tts_daemon.py` — แก้ต้องแก้คู่กัน และคง backward compatible กับ client เดิม)
+- แก้เส้นทาง `--stdin <input.txt> <output.wav>` หรือ daemon protocol ที่ Hermes agent (external consumer, ดู `README_HERMES.md`) พึ่งพา
+- เพิ่ม/เปลี่ยน environment variable ของ daemon (`TTS_DAEMON_SOCK`, `TTS_CACHE_DIR`, `TTS_QUEUE_TIMEOUT`, `TTS_TELEMETRY_LOG`, `TTS_IDLE_UNLOAD`) หรือวิธีติดตั้ง launchd service
+- แก้วิธีประกอบ/รัน subprocess (`ffmpeg` concat/mp3, model load) จาก path/text ที่มาจาก user input
+- เพิ่ม/เปลี่ยน mood preset (`MOOD_PRESETS` ใน `qwen_clone_tts.py`) หรือ emoji↔mood map (`say_moods.py`, `transcribe_mood.py`) — convention อยู่ใน `CLAUDE.md`
+- เปลี่ยน Discord slash command surface ของ `discord_say_bot.py` (`/say`, `/transcribe`) — ดู README § Discord Bot
+- review งานที่กระทบ module boundary ระหว่าง `qwen_clone_tts.py` (single source of truth ของ constants: `MODEL_PATH`, `VOICES_DIR`, `MAX_CHARS`, `MOOD_PRESETS`, `chunk_text()`, `resolve_*`) กับ importer ของมัน (`tts_daemon.py`, `tune_voice.py`, `discord_say_bot.py`)
 
-ถ้า ticket หรือคำสั่งขัดกับพฤติกรรมเดิมใน `README.md` ให้เพิ่มหรืออัปเดต `### Open Questions` และถามผู้ใช้ว่าจะปรับ behavior/README หรือให้ถือเป็น exception เฉพาะงานนั้น ห้ามเดาเองว่า behavior เดิมหรือคำสั่งใหม่ถูกกว่า
+ถ้า ticket หรือคำสั่งขัดกับ convention ใน `CLAUDE.md`/`coding-style.md` ให้เพิ่มหรืออัปเดต `### Open Questions` และถามผู้ใช้ว่าจะปรับ convention หรือให้ถือเป็น exception เฉพาะงานนั้น ห้ามเดาเองว่า convention เดิมหรือคำสั่งใหม่ถูกกว่า
 
 ## Board File
 
 Board อยู่ในไฟล์เดียวที่ `obsidian/kanban/work-kanban-board.md` มี frontmatter `kanban-plugin: board` สำหรับให้ Obsidian render เป็น visual board และมี `## COLUMN` sections:
 
 - `## BACKLOG` — ticket ที่ยังไม่เริ่ม
-- `## PLAN` — ticket ที่กำลัง planning
 - `## TODO` — ticket ที่ plan แล้วและพร้อมเริ่ม
+- `## PLAN` — ticket ที่กำลัง planning
 - `## INPROGRESS` — ticket ที่กำลังทำอยู่
 - `## REVIEW` — ticket ที่รอ review
 - `## DONE` — ticket ที่เสร็จแล้ว
@@ -51,7 +47,7 @@ Ticket รายใบต้องอยู่ใน:
 
 ## Ticket File Format
 
-Ticket file ต้องเป็น source of truth ของงานนั้นเสมอ ใช้ YAML frontmatter ตามตัวอย่างจริงใน `obsidian/kanban/tasks/TTS-1000.md`:
+Ticket file ต้องเป็น source of truth ของงานนั้นเสมอ ใช้ YAML frontmatter ตามตัวอย่างจริงใน `obsidian/kanban/tasks/TTS-1007.md`:
 
 ```md
 ---
@@ -60,6 +56,7 @@ title: Ticket title
 type: feature
 status: todo
 priority: high
+notion_page_id: <เติมอัตโนมัติเมื่อ sync ขึ้น Notion — optional>
 tags:
   - kanban/ticket
   - work
@@ -69,7 +66,7 @@ tags:
 
 Status: Todo
 Priority: High
-Ref: <optional link to spec/GitHub issue>
+Source: <feedback/สถานการณ์ที่ทำให้เกิด ticket นี้ — หรือ Ref: link ไป issue/spec>
 
 ### Summary
 ...
@@ -80,6 +77,9 @@ Ref: <optional link to spec/GitHub issue>
 ### Scope
 ...
 
+### Non-goals
+...
+
 ### Acceptance Criteria
 ...
 
@@ -87,23 +87,23 @@ Ref: <optional link to spec/GitHub issue>
 ...
 ```
 
+Section ที่เพิ่มระหว่าง flow ตามสถานะ: `### Decisions` (จาก brainstorming/plan), `### Implementation Plan` (จาก `/kanban plan`), `### Open Questions`, `### Validation Results`, `### Review Notes`, `### Blocked Notes`, `### Done Notes`, `### Closed Notes`
+
 กติกาสำคัญ:
 
 - หนึ่ง ticket ต่อหนึ่งไฟล์เท่านั้น
-- ชื่อไฟล์ต้องตรงกับ ticket id เช่น `obsidian/kanban/tasks/TTS-1001.md`
+- ชื่อไฟล์ต้องตรงกับ ticket id เช่น `obsidian/kanban/tasks/TTS-1007.md`
 - `status:` ใน frontmatter และ `Status:` ใน body ต้องตรงกับ board ที่มี link ไปหา ticket นั้น
-- ห้าม duplicate link ของ ticket เดียวกันไว้หลาย board พร้อมกัน
-- ห้ามย้ายหรือ rename ticket file เมื่อเปลี่ยนสถานะ ให้ย้ายเฉพาะ link ระหว่าง board files
+- ห้าม duplicate link ของ ticket เดียวกันไว้หลาย board section พร้อมกัน
+- ห้ามย้ายหรือ rename ticket file เมื่อเปลี่ยนสถานะ ให้ย้ายเฉพาะ link ระหว่าง board sections
 
 ## Local Provider Commands
 
-`kanban` skill อ้างถึงคำสั่งของ project ด้วย **operation name** กลาง ๆ เท่านั้น ตารางนี้คือ mapping ของ project นี้ (Qwen3-TTS Apple Silicon CLI/daemon — ไม่มี web framework, ไม่มี DB, ไม่มี Discord bot) แทนที่ `TTS-XXXX` ด้วย ticket id จริง
-
-โปรเจกต์นี้ตั้ง `.kanban.json` ไว้เป็น `"provider": "notion"` อยู่แล้ว (มี `notionDataSourceId` และ `notionStatusMap` จริง) ดังนั้น `import-ticket`/`sync-ticket` ทำงานผ่าน Notion REST API (`ntn api ...`) โดยตรงตาม SKILL.md ของ kanban skill ไม่ต้องมี local command เพิ่มเติม
+`kanban` skill อ้างถึงคำสั่งของ project ด้วย **operation name** กลาง ๆ เท่านั้น ตารางนี้คือ mapping ของ project นี้ (Python MLX TTS: single-file script ที่ repo root + Unix-socket daemon — ไม่มี framework CLI สำหรับ ticket sync) แทนที่ `TTS-XXXX` ด้วย ticket id จริง
 
 | Operation | Command |
 |---|---|
-| `import-ticket` | จัดการผ่าน notion provider ตาม `.kanban.json` (ดู SKILL.md `Configuration` section) — ไม่มี local command เพิ่มเติม |
+| `import-ticket` | จัดการผ่าน notion provider ตาม `.kanban.json` (`provider: notion`, `notionDataSourceId`, `notionStatusMap`) — ดู SKILL.md `Configuration` section และ provider branch ใน `cmd/create.md`/`cmd/move-review.md` ฯลฯ; ticket ที่ sync แล้วจะมี `notion_page_id` ใน frontmatter — ไม่มี local command เพิ่มเติม |
 | `sync-ticket` | เช่นเดียวกับ `import-ticket` |
 | `create-pr` | `gh pr create` (ดู skill `git-workflow-and-versioning` สำหรับ flow มาตรฐาน) |
 | `sync-progress` | N/A — โปรเจกต์นี้ไม่มี dashboard/progress bar widget ที่ต้อง sync ให้ข้ามขั้นตอนนี้เงียบ ๆ |
@@ -116,20 +116,23 @@ Lark task config: โปรเจกต์นี้ไม่มี environment v
 
 ### post-implementation
 
-หลัง implement เสร็จใน `/kanban start` ให้ทำตามลำดับนี้ก่อนรัน validation ของ ticket:
+หลัง implement เสร็จใน `/kanban start` ให้เช็กว่า ticket แตะสิ่งที่ต้องอัปเดตคู่กันหรือไม่ ก่อนรัน validation ของ ticket:
 
-1. โปรเจกต์นี้ไม่มี database/model และไม่มี migration tool ใด ๆ — ข้ามขั้นตอน schema/seeder เสมอ
-2. ถ้า ticket เพิ่มหรือเปลี่ยน environment variable ใหม่ที่ `tts_daemon.py`/สคริปต์อื่นอ่าน ให้อัปเดตตาราง env var ใน `README.md` คู่กับโค้ดเสมอ (โปรเจกต์นี้ไม่มี `.env.example` แยก มี `.env` จริงเท่านั้น — อย่า commit ค่า secret ใด ๆ ถ้าเพิ่มเข้าไป)
-3. ถ้า ticket แก้ daemon protocol (request/response JSON schema) ให้ตรวจว่า `qwen_clone_tts.py` client ยัง parse response เดิมได้ (backward compatible) ก่อนถือว่า implement เสร็จ
+1. ถ้า ticket เพิ่ม/เปลี่ยน environment variable ใหม่ (ของ daemon หรือ Discord bot) ให้อัปเดต `README.md` (§ Daemon `Config (environment variables)` หรือ § Discord Bot `Config`) และ `CLAUDE.md` คู่กับโค้ดเสมอ
+2. ถ้า ticket เปลี่ยน CLI flag, daemon protocol/response shape, หรือ mood/emoji map ให้อัปเดต `README.md` (§ CLI Reference / § Daemon `Protocol` / § Discord Bot `Emoji → mood map`) ให้ตรงกับพฤติกรรมใหม่
+3. โปรเจกต์นี้ไม่มี database, migration, หรือ seeder — ข้ามขั้นตอนนี้เงียบ ๆ เสมอ
+4. ถ้า ticket เปลี่ยนวิธีติดตั้ง daemon เป็น service (`launchd/com.liino.qwen-tts-daemon.plist`, path, `RunAtLoad`/`KeepAlive`) ให้อัปเดต plist template + README § Daemon และ `README_HERMES.md` § 5
 
 ### Deployment Report
 
-ตอน report ผลของ `/kanban start` ต้องบอกสิ่งที่ผู้ใช้ต้องทำเมื่อใช้งานจริง (deploy ในที่นี้คือรันบนเครื่อง Apple Silicon ของผู้ใช้เอง ไม่ใช่ deploy ขึ้น server):
+ตอน report ผลของ `/kanban start` ต้องบอกสิ่งที่ผู้ใช้ต้องทำเมื่อ deploy/reinstall:
 
-- ระบุถ้ามี environment variable ใหม่ที่ต้องตั้งก่อนรัน daemon/CLI (นอกเหนือจาก default ใน README.md)
-- ระบุถ้ามี dependency ใหม่ที่ต้องเพิ่มใน `requirements.txt` และติดตั้งใหม่ (`pip install -r requirements.txt` ใน `.venv`)
-- ระบุถ้าต้อง restart daemon ที่รันอยู่ (`tts_daemon.py`) เพื่อให้ code เปลี่ยนมีผล หรือต้องแก้/reinstall `launchd/com.liino.qwen-tts-daemon.plist`
-- ระบุชัดเจนเมื่อไม่ต้องทำอะไรเลยนอกจาก pull โค้ดใหม่
+- ระบุถ้ามี environment variable ใหม่ที่ต้องตั้งจริง (`TTS_*` ของ daemon หรือ `DISCORD_BOT_TOKEN` ฝั่ง bot)
+- ระบุถ้ามี dependency ใหม่ที่ต้อง `.venv/bin/pip install -r requirements.txt`
+- ระบุถ้าต้อง reinstall launchd service (`launchctl unload ... && launchctl load ...`) เพราะ path/plist เปลี่ยน
+- ระบุถ้าต้อง restart daemon (`.venv/bin/python tts_daemon.py`) เพราะแก้ logic ในตัว daemon เอง — แต่ถ้าแก้แค่ constant ที่ client resolve เอง (เช่น `MOOD_PRESETS`) daemon ไม่ต้อง restart
+- ระบุถ้าต้อง restart Discord bot (`discord_say_bot.py` / `run_say_bot.sh`) เพราะ slash command surface หรือ `MOOD_PRESETS` dropdown เปลี่ยน
+- ระบุชัดเจนเมื่อไม่ต้องทำอะไรเลยตอน deploy
 
 ## Optional Lark Ticket Command Sync
 
@@ -163,6 +166,28 @@ Lark Ticket Command sync เป็น optional layer เท่านั้น; `
 - ถ้า sync ปิดอยู่หรือไฟล์หาย ให้ skip Lark แล้วทำ local flow ต่อ
 - Lark sync failure ห้ามเปลี่ยนหรือ revert local board state แบบเงียบ ๆ
 
+## Canonical Kanban Command Mapping
+
+ทุก agent และทุก profile (`liino`, `sonnet`, `deepseek-flash`) ต้องตีความชื่อขั้นตอนในคำสั่งของผู้ใช้ตาม mapping เดียวกันนี้ และต้องเรียกใช้คำสั่งตามรูปแบบที่ระบุ ห้ามแทนชื่อขั้นตอนด้วยคำสั่งอื่น:
+
+| ขั้นตอนที่ผู้ใช้ระบุ | คำสั่ง Kanban ที่ต้องใช้ |
+|---|---|
+| `plan` | `/kanban plan TTS-XXXX` |
+| `start` | `/kanban start TTS-XXXX` |
+| `move-review` | `/kanban move-review TTS-XXXX` |
+| `review` | `/kanban review TTS-XXXX` |
+| `done` | `/kanban done TTS-XXXX` |
+
+กติกาการตีความ:
+
+1. เมื่อผู้ใช้ระบุลำดับ เช่น `plan -> start -> move-review -> review -> done` ให้ดำเนินการตามลำดับนี้เท่านั้น และห้ามข้ามขั้นโดยอ้างว่า implementation ผ่านแล้ว
+2. ถ้าผู้ใช้ระบุ `start` ให้ถือว่าเป็นการเรียก `/kanban start TTS-XXXX` ไม่ใช่เพียงการเริ่มแก้ไฟล์ด้วย Git
+3. `move-review` เป็นขั้นแยกจาก `start` และต้องใช้ `/kanban move-review TTS-XXXX` เท่านั้น โดยต้องทำ GitHub handoff/PR ตาม Review Gate ด้านล่าง
+4. `review` เป็นขั้นตรวจสอบหลัง ticket อยู่ใน Review และต้องใช้ `/kanban review TTS-XXXX` ก่อนการตัดสิน PASS/NEEDS FIX/BLOCKED
+5. `done` ทำได้เฉพาะหลัง Review Gate ได้ `PASS` และต้องใช้ `/kanban done TTS-XXXX`
+6. ถ้าคำสั่งที่ผู้ใช้ระบุขัดกับสถานะ ticket หรือมี dependency/blocker ให้หยุดที่ขั้นนั้นและรายงาน blocker อย่างชัดเจน ห้ามเลื่อนสถานะเอง
+7. ในรายงานทุกขั้น ให้ระบุคำสั่ง Kanban ที่ถูกใช้จริงและหลักฐานของผลลัพธ์ ห้ามรายงานจากเจตนาหรือแผนที่ยังไม่ได้ดำเนินการ
+
 ## Flow
 
 ### 1. Create Ticket
@@ -170,9 +195,9 @@ Lark Ticket Command sync เป็น optional layer เท่านั้น; `
 เมื่อสร้าง ticket ใหม่:
 
 1. ใช้ `using-superpowers` เพื่อเลือก skill ที่เหมาะกับ ticket นี้
-2. อ่าน `README.md` (และ `README_HERMES.md` ถ้าเกี่ยวกับ Hermes/MCP bridge) ถ้างานแตะ CLI flag, daemon protocol, หรือ env var; ข้ามได้ถ้าเป็นงาน copy-only/board-only
-3. ใช้ `brainstorming` ถ้า requirement ยังไม่ชัด, มีหลายแนวทาง, ต้องแตก scope, หรือชนกับ behavior เดิม
-4. สร้าง `obsidian/kanban/tasks/TTS-XXXX.md` พร้อม frontmatter (`ticket_id`, `title`, `type`, `status: backlog`, `priority`, `tags`), `Status: Backlog`, priority, summary, context, scope, acceptance criteria, และ validation
+2. อ่าน `CLAUDE.md` และ `README.md` ถ้างานแตะ CLI flag, daemon protocol, subprocess/ffmpeg, mood preset, หรือ Discord bot; ข้ามได้ถ้าเป็นงาน copy-only/board-only
+3. ใช้ `brainstorming` ถ้า requirement ยังไม่ชัด, มีหลายแนวทาง, ต้องแตก scope, หรือชนกับ convention เดิม
+4. สร้าง `obsidian/kanban/tasks/TTS-XXXX.md` พร้อม frontmatter (`ticket_id`, `title`, `type`, `status: backlog`, `priority`, `tags`), `Status: Backlog`, priority, summary, context, scope, non-goals, acceptance criteria, และ validation
 5. เพิ่ม link ของ ticket ใน `obsidian/kanban/work-kanban-board.md (## BACKLOG)`
 6. ถ้า optional Lark sync เปิดอยู่ ให้แจ้งผู้ใช้ว่าต้อง backfill ผ่าน `lark-cli` เอง (ไม่มี local command อัตโนมัติ)
 
@@ -182,11 +207,13 @@ Lark Ticket Command sync เป็น optional layer เท่านั้น; `
 
 เมื่อผู้ใช้สั่งให้เริ่มทำ ticket:
 
+> การสั่งงาน Sonnet ต้องเริ่มด้วย prompt `/kanban start TTS-XXXX` เป็นอันดับแรกเสมอ
+
 1. หา link ของ ticket จาก board file ปัจจุบัน โดยปกติคือ `obsidian/kanban/work-kanban-board.md (## PLAN)`, `(## BACKLOG)` หรือ `(## TODO)`
 2. อ่าน ticket file จาก `obsidian/kanban/tasks/TTS-XXXX.md`
-3. อ่าน `README.md`/`README_HERMES.md` เมื่อ ticket เข้าเงื่อนไข Product-Level Reference ด้านบน
-4. อ่าน context, related script(s) (`main.py`/`qwen_clone_tts.py`/`tts_daemon.py`/`tune_voice.py`) และ acceptance criteria ที่ ticket อ้างถึง
-5. ถ้า ticket ขัดกับ behavior เดิมใน `README.md` และผู้ใช้ยังไม่ approve exception ให้เพิ่มหรืออัปเดต `### Open Questions` และหยุดก่อนย้ายเข้า `In Progress`
+3. อ่าน `CLAUDE.md`/`README.md`/`README_HERMES.md` เมื่อ ticket เข้าเงื่อนไข Product-Level Reference ด้านบน
+4. อ่าน context, related script(s) (`qwen_clone_tts.py`/`tts_daemon.py`/`main.py`/`discord_say_bot.py`/`say_moods.py`/`transcribe_mood.py`/`tune_voice.py`), test ที่เกี่ยวข้อง (`test_qwen_clone_tts.py`/`test_tts_daemon.py`/`test_say_moods.py`/`test_transcribe_mood.py`/`test_stt_transcribe.py`) และ acceptance criteria ที่ ticket อ้างถึง
+5. ถ้า ticket ขัดกับ convention ใน `CLAUDE.md`/`coding-style.md` และผู้ใช้ยังไม่ approve exception ให้เพิ่มหรืออัปเดต `### Open Questions` และหยุดก่อนย้ายเข้า `In Progress`
 6. ถ้า ticket มี `### Implementation Plan` และ `Status: Plan` แล้ว ให้เริ่มต่อได้ทันทีโดยไม่เรียก `writing-plans` ซ้ำ
 7. ถ้า ticket อยู่ `Status: Backlog` สามารถข้าม `Plan` และย้ายเข้า `In Progress` ได้ทันทีเมื่อครบทุกเงื่อนไขนี้:
    - acceptance criteria ชัดเจน
@@ -195,12 +222,14 @@ Lark Ticket Command sync เป็น optional layer เท่านั้น; `
    - งานเล็ก ความเสี่ยงต่ำ และไม่เข้าเกณฑ์ที่ควรใช้ `writing-plans` ตาม Plan Ticket flow
 8. ถ้า backlog ticket ไม่ครบทุกเงื่อนไขสำหรับการข้าม `Plan` ให้ทำ Plan Ticket flow ก่อน และหยุดถ้า plan ทำให้เกิด `Open Questions`
 9. ใช้ skill `using-superpowers` เพื่อเลือก skill ที่เหมาะกับงานก่อนเริ่ม implement
-10. ย้ายเฉพาะ link ของ ticket ไป `obsidian/kanban/work-kanban-board.md (## INPROGRESS)`
-11. เปลี่ยน `Status:`/`status:` ใน ticket file เป็น `In Progress`/`inprogress`
-12. ทำงานตาม scope และ acceptance criteria
-13. หลัง implement และ validation ให้ report ผลงานและบอกว่า ticket พร้อม review หรือยัง
-14. ห้ามย้าย ticket ไป `Review` อัตโนมัติระหว่างคำสั่ง `start` แม้ implementation และ validation จะผ่านแล้ว
-15. ต้องรอคำสั่ง `/kanban move-review TTS-XXXX` แบบ explicit ก่อน จึงค่อยเพิ่ม `Review Notes`, ย้าย board link ไป `(## REVIEW)`, และเปลี่ยน `Status:` เป็น `Review`
+10. ก่อนแก้ไขไฟล์ใด ๆ ต้องสร้างและ checkout branch `feature/TTS-XXXX` จาก `main` (หรือ `bugfix/TTS-XXXX` / ชื่อ branch ที่ผู้ใช้ระบุ) และตรวจสอบด้วย `git branch --show-current`; ห้าม implement บน `main`
+11. ย้ายเฉพาะ link ของ ticket ไป `obsidian/kanban/work-kanban-board.md (## INPROGRESS)`
+12. เปลี่ยน `Status:`/`status:` ใน ticket file เป็น `In Progress`/`inprogress`
+13. ทำงานตาม scope และ acceptance criteria โดยให้ skill kanban start จัดการ test และ validation ที่เกี่ยวข้อง ไม่ต้องสั่งตรวจ test/validation ซ้ำแยกต่างหาก
+14. เมื่อ implementation และ validation ผ่านแล้ว ให้ commit งานบน feature branch และเตรียม branch สำหรับ review; ห้ามอ้างว่าเริ่มงานบน branch ถูกต้องหากยังไม่ได้ตรวจสอบจริง
+15. หลัง skill kanban start จบ ให้ report ผลงานและบอกว่า ticket พร้อม review หรือยัง
+16. ห้ามย้าย ticket ไป `Review` อัตโนมัติระหว่างคำสั่ง `start` แม้ implementation และ validation จะผ่านแล้ว
+17. ต้องรอคำสั่ง `/kanban move-review TTS-XXXX` แบบ explicit ก่อน จึงค่อยเพิ่ม `Review Notes`, ย้าย board link ไป `(## REVIEW)`, และเปลี่ยน `Status:` เป็น `Review`
 
 ห้ามเริ่ม implement หาก ticket ไม่มี acceptance criteria หรือ context ที่จำเป็นต่อการตัดสินใจ
 
@@ -209,20 +238,20 @@ Lark Ticket Command sync เป็น optional layer เท่านั้น; `
 เมื่อผู้ใช้สั่งให้ plan ticket ก่อนเริ่มงาน:
 
 1. หา ticket file จาก `obsidian/kanban/tasks/TTS-XXXX.md` และอ่าน context/AC/validation ที่จำเป็น
-2. อ่าน `README.md`/`README_HERMES.md` เมื่อ ticket เข้าเงื่อนไข Product-Level Reference ด้านบน
+2. อ่าน `CLAUDE.md`/`README.md`/`README_HERMES.md` เมื่อ ticket เข้าเงื่อนไข Product-Level Reference ด้านบน
 3. ใช้ skill `using-superpowers` เพื่อเลือก skill ที่เหมาะกับการวางแผน
-4. แสดง pre-plan assessment สั้น ๆ: status/board ปัจจุบัน, ควรใช้ `brainstorming` หรือไม่, ควรใช้ `writing-plans` หรือไม่, behavior alignment กับ `README.md`, และไฟล์/สถานะที่จะเปลี่ยน
+4. แสดง pre-plan assessment สั้น ๆ: status/board ปัจจุบัน, ควรใช้ `brainstorming` หรือไม่, ควรใช้ `writing-plans` หรือไม่, convention alignment (`CLAUDE.md`/`coding-style.md`), และไฟล์/สถานะที่จะเปลี่ยน (โปรเจกต์นี้ไม่มี web panel UI — ข้าม UI design gate ใด ๆ เสมอ; งาน mood ที่ต้องพิสูจน์ว่าโมเดลออกเสียงต่างจริง ต้องมี A/B validate ด้วย `tune_voice.py` เป็น gate ก่อน)
 5. ถามผู้ใช้ด้วย `Yes` / `No` ว่าจะ plan ต่อหรือไม่; ถ้า `No` ให้หยุด
-6. ถ้า context ยังไม่พอ หรือ ticket ขัดกับ behavior เดิมและยังไม่ได้รับ approval ให้เพิ่ม `### Open Questions` แล้วหยุด
-7. ถ้า `brainstorming` ถูกแนะนำ ให้ใช้เพื่อ clear scope / approach / decision ที่สำคัญ (เช่น เปลี่ยน cache key, protocol field, หรือ default env var); ถ้าทำให้ยังตอบไม่ได้ ให้หยุดและบันทึก `Open Questions`
+6. ถ้า context ยังไม่พอ หรือ ticket ขัดกับ convention เดิมและยังไม่ได้รับ approval ให้เพิ่ม `### Open Questions` แล้วหยุด
+7. ถ้า `brainstorming` ถูกแนะนำ ให้ใช้เพื่อ clear scope / approach / decision ที่สำคัญ; ถ้าทำให้ยังตอบไม่ได้ ให้หยุดและบันทึก `Open Questions`
 8. ถ้า `writing-plans` ถูกแนะนำ ให้ใช้หลัง `brainstorming` resolved แล้ว; ถ้าไม่ถูกแนะนำ ให้เขียน plan แบบ concise ได้เลย
-9. เพิ่มหรืออัปเดต `### Implementation Plan` โดยใส่ context, planned changes, files likely to change, validation commands (manual CLI/daemon run — ไม่มี automated test suite), และ risks / decisions
+9. เพิ่มหรืออัปเดต `### Implementation Plan` โดยใส่ context, planned changes, files likely to change (`qwen_clone_tts.py`/`tts_daemon.py`/`main.py`/`discord_say_bot.py`/`say_moods.py`/`transcribe_mood.py`/`tune_voice.py`/`test_*.py`/`README.md`/`CLAUDE.md`), validation commands (`.venv/bin/python -m pytest -q` + manual CLI/daemon run ที่จำเป็น), และ risks / decisions
 10. ย้ายเฉพาะ link ของ ticket ไป `obsidian/kanban/work-kanban-board.md (## PLAN)` และเปลี่ยน `Status:` เป็น `Plan`
 11. ห้าม implement code changes ระหว่างคำสั่ง plan
 
-แนะนำ `brainstorming` เมื่อ requirement ยังไม่ชัด, มีหลาย approach, มี `Open Questions`, ต้องแตก scope, มี tension กับ behavior เดิมใน README.md, หรือมี decision สำคัญที่ไม่ควรเดาระหว่าง implementation (เช่น breaking daemon protocol)
+แนะนำ `brainstorming` เมื่อ requirement ยังไม่ชัด, มีหลาย approach, มี `Open Questions`, ต้องแตก scope, มี tension กับ convention เดิม, หรือมี decision สำคัญที่ไม่ควรเดาระหว่าง implementation
 
-แนะนำ `writing-plans` เมื่อ ticket แตะหลายไฟล์ หลาย script (CLI + daemon), daemon protocol/cache, หรือมี regression risk ชัดเจน; งาน copy-only, board-only, documentation-only, หรือ single-file low-risk ใช้ plan แบบ concise ได้
+แนะนำ `writing-plans` เมื่อ ticket แตะทั้ง `qwen_clone_tts.py` และ `tts_daemon.py` พร้อมกัน, เปลี่ยน daemon protocol / cache key / env var contract, เปลี่ยนเส้นทาง `--stdin`/Hermes, หรือมี regression risk ชัดเจน; งาน copy-only, board-only, documentation-only, single-file low-risk, หรือเพิ่ม mood preset ตรง ๆ ใช้ plan แบบ concise ได้
 
 เมื่อผู้ใช้สั่ง `start`:
 
@@ -232,25 +261,25 @@ Lark Ticket Command sync เป็น optional layer เท่านั้น; `
 
 ### 3. Superpowers Gate
 
-ใช้ skill เหล่านี้เป็น workflow helper ระหว่างทำ ticket โดยไม่แทนที่ `README.md` หรือ review gates ของ repo นี้
+ใช้ skill เหล่านี้เป็น workflow helper ระหว่างทำ ticket โดยไม่แทนที่ `CLAUDE.md`, tests, หรือ review gates ของ repo นี้
 
 Skill map:
 
 - `using-superpowers`: ขั้นแรกของทุก ticket
 - `brainstorming`: requirement ยังคลุมเครือ, ต้องเลือก approach, หรือแตกงานจาก scope ใหญ่เกินไป
 - `writing-plans`: `/kanban plan` เมื่อ pre-plan assessment แนะนำ
-- `systematic-debugging` / `debugging-and-error-recovery`: bug/debug gate สำหรับ repro, trace, isolate root cause เมื่อ manual validation fail, bug ยังไม่ชัด, behavior ไม่ตรง AC, หรือเจอ runtime error (เช่น daemon crash, model load fail)
-- `code-review`: outsider review gate สำหรับ plan/diff/code change ที่มี regression risk หรือแตะ daemon protocol
-- `security-review`: เพิ่มเติมจาก `code-review` เมื่อ ticket แตะ subprocess/ffmpeg invocation หรือ daemon socket input parsing
+- `systematic-debugging` / `debugging-and-error-recovery`: bug/debug gate สำหรับ repro, trace, isolate root cause เมื่อ test fail, bug ยังไม่ชัด, behavior ไม่ตรง AC, เจอ subprocess/model/daemon runtime error, หรือเสียงที่ generate ออกมาผิด (`TTS chunk 1 produced no final audio`, daemon ตอบ `no audio produced`)
+- `code-review`: outsider review gate สำหรับ plan/diff/code change ที่มี regression risk หรือแตะ module boundary ระหว่าง `qwen_clone_tts.py` (shared constants) กับ importer (`tts_daemon.py`/`tune_voice.py`/`discord_say_bot.py`) หรือแตะ daemon protocol
+- `security-review`: เพิ่มเติมจาก `code-review` เฉพาะเมื่อ ticket เปลี่ยนวิธีประกอบ subprocess argv (ffmpeg / model load) จาก input ภายนอก หรือวิธี parse daemon socket request (risk: argv/shell injection ผ่าน user text, `--stdin` file path, หรือ daemon request field `text`/`instruct`/`voice`/`lang`)
 
 เกณฑ์ขั้นต่ำ:
 
 - Ticket เล็กและชัดเจน: ใช้ `using-superpowers` อย่างน้อยหนึ่งครั้งก่อนเริ่ม
 - Ticket ที่ไม่ชัด: ใช้ `brainstorming` ก่อน finalize scope, AC หรือ `### Implementation Plan`
 - Ticket เสี่ยงหรือ context ไม่พอ: ผ่าน `/kanban plan` ก่อน `/kanban start`
-- Bug report / regression / runtime fail (daemon crash, model load error, ffmpeg fail): ใช้ `systematic-debugging` หรือ `debugging-and-error-recovery` ก่อนเสนอ fix
-- Plan/diff/code change เสี่ยงหรือหลาย script: ใช้ `code-review`
-- Ticket ที่แตะ subprocess/ffmpeg หรือ socket input parsing: เพิ่ม `security-review`
+- Bug report / regression / test fail / runtime fail / เสียงผิด: ใช้ `systematic-debugging` หรือ `debugging-and-error-recovery` ก่อนเสนอ fix
+- Plan/diff/code change เสี่ยงหรือแตะ module boundary / daemon protocol: ใช้ `code-review`
+- Ticket ที่เปลี่ยนวิธีประกอบ subprocess command หรือ parse daemon input จาก input ภายนอก: เพิ่ม `security-review`
 
 ถ้าใช้ skill เหล่านี้ระหว่าง ticket ให้บันทึกสั้น ๆ ใน `Review Notes` หรือ `Done Notes` ว่าใช้ skill ใดและช่วยตัดสินใจเรื่องอะไร
 
@@ -258,20 +287,27 @@ Skill map:
 
 ระหว่างทำ ticket ต้องปฏิบัติตาม:
 
-- `README.md` / `README_HERMES.md` (ตามที่เกี่ยวข้อง)
+- `CLAUDE.md` (root)
 - `obsidian/kanban/context/requirements.md`
 - `obsidian/kanban/context/coding-style.md`
-- Existing project conventions (argparse CLI pattern, env-var-only daemon config, stdout/stderr result reporting)
+- Existing project conventions: module boundary (`qwen_clone_tts.py` = single source of truth ของ constants ↔ importer), daemon protocol backward-compat + hand-implement สองฝั่ง, daemon config มาจาก env var เท่านั้น (ไม่มี config file), `OK <path>` / `ERROR: ...` stdout/stderr contract + exit code, ffmpeg/subprocess ส่ง argv เป็น list เสมอ (ห้าม `shell=True`), mood preset style "trait, trait, pacing" สั้น English
 
-ทุก code change ต้อง validate ด้วยการรันจริง (ไม่มี automated test suite ในโปรเจกต์นี้) เช่น:
+**Never use system `python3`** — ใช้ `.venv/bin/python` เสมอ (ดู `CLAUDE.md`); Python <3.10 ทำ CLI fail แบบเงียบ ๆ (`TTS chunk 1 produced no final audio`)
 
-- รัน `python qwen_clone_tts.py --text "..." --out outputs/<file>.wav` แล้วตรวจ `OK <path>` + ฟังไฟล์จริง
-- ถ้าแก้ daemon: start daemon ใหม่, ยิง request ผ่าน client จริง, ตรวจ response JSON และ telemetry log
-- ถ้า ticket เพิ่ม pure logic ที่ควรมี automated test (parsing, cache key, queue timeout) ให้พิจารณาเพิ่ม `tests/` + `pytest` ตามที่ระบุใน `coding-style.md` และบันทึกการตัดสินใจนี้ใน plan
+การทดสอบ:
 
-หาก manual validation fail และสาเหตุยังไม่ชัด ให้ใช้ skill `systematic-debugging` เพื่อแยก root cause ก่อนแก้ไข
+- โปรเจกต์นี้มี `pytest` (`requirements.txt`) และ test file `test_*.py` ที่ repo root — ไม่มี `tests/` package, ไม่มี `pyproject.toml`, pytest auto-discover จาก root
+- code change ที่มี pure function ทดสอบได้ชัดเจน (parsing, `resolve_lang`/`resolve_instruct`, `_cache_key`, `chunk_text`, emoji↔mood round-trip, `detect_mood` keyword, queue timeout math) **ต้อง** มี test ใน `test_<module>.py` ที่ตรงกัน และรัน `.venv/bin/python -m pytest -q` ให้เขียว
+- code change ที่กระทบ audio generation / model / daemon runtime ต้อง manual validation ด้วย:
+  - CLI: `.venv/bin/python qwen_clone_tts.py --text "..." --out outputs/<file>.wav` → เช็ก `OK <path>` + เปิดไฟล์ฟังจริง
+  - Daemon: start daemon (`.venv/bin/python tts_daemon.py`), ยิง request ผ่าน client จริง, เช็ก response JSON และบรรทัดใหม่ใน `TTS_TELEMETRY_LOG`
+  - Discord (ถ้าแตะ bot): `/say` / `/transcribe` live ใน channel จริง
+- โปรเจกต์นี้ไม่มี lint/format command (ไม่มี ruff/black/mypy/Makefile/pyproject) — ห้ามอ้างอิงคำสั่งที่ไม่มีจริง
+- ห้ามลบ manual validation step เดิมโดยไม่ได้รับอนุมัติ
 
-หากเป็น bug report, regression, หรือ behavior ที่ผู้ใช้แจ้งว่า "เสีย", "ไม่ทำงาน", "เสียงผิด", "error", "crash", "failing" ให้ใช้ skill `debugging-and-error-recovery` หรือ `systematic-debugging` ตั้งแต่เริ่ม debug เว้นแต่ผู้ใช้บอกให้ข้าม แต่ยังต้องทำตามขั้นตอน repro → trace → falsify ภายในงานนั้น
+หาก test fail และสาเหตุยังไม่ชัด ให้ใช้ skill `systematic-debugging` เพื่อแยก root cause ก่อนแก้ไข
+
+หากเป็น bug report, regression, หรือ behavior ที่ผู้ใช้แจ้งว่า "เสีย", "ไม่ทำงาน", "เสียงผิด", "error", "throwing", "failing" ให้ใช้ skill `debugging-and-error-recovery` หรือ `systematic-debugging` ตั้งแต่เริ่ม debug เว้นแต่ผู้ใช้บอกให้ข้าม แต่ยังต้องทำตามขั้นตอน repro → trace → falsify ภายในงานนั้น
 
 ### 5. Move To Review
 
@@ -285,18 +321,32 @@ Skill map:
 
 ```md
 ### Review Notes
-- Files: `qwen_clone_tts.py`, `tts_daemon.py`
-- Commands: manual run `python qwen_clone_tts.py --text "..." --out outputs/test.wav` (OK), daemon round trip ผ่าน
+- Files: `qwen_clone_tts.py`, `say_moods.py`, `test_say_moods.py`
+- Commands: `.venv/bin/python -m pytest -q` (59 passed), `.venv/bin/python qwen_clone_tts.py --text "..." --mood pouty --out outputs/pouty.wav` → OK + ฟัง
+- Deploy: ไม่มี env/dep ใหม่; daemon ไม่ต้อง restart; `discord_say_bot.py` ต้อง restart ให้ dropdown อัปเดต
 - Skills: `using-superpowers`, `writing-plans`
 ```
 
 ### 6. Review Gate
 
+ก่อนหรือพร้อมกับการย้าย ticket เข้า `## REVIEW` ต้องทำ GitHub handoff ให้ตรวจสอบได้:
+
+1. ตรวจสอบว่าอยู่บน feature branch `feature/TTS-XXXX` หรือ `bugfix/TTS-XXXX` (หรือชื่อ branch ที่ผู้ใช้ระบุ) และไม่ใช่ `main`
+2. commit งานที่พร้อม review และ push branch ด้วย `git push -u origin HEAD`
+3. สร้าง pull request ด้วย `gh pr create` ตาม operation `create-pr` ของโปรเจกต์ โดยตั้ง base เป็น `main` และใส่ ticket id, summary, test/validation evidence และ review scope
+4. อ่านผลลัพธ์หรือใช้ `gh pr view` เพื่อยืนยันว่า PR ถูกสร้างจริง พร้อมบันทึก URL/number ใน `Review Notes`
+5. ถ้า push หรือสร้าง PR ไม่สำเร็จ ให้เพิ่ม `Blocked Notes` และห้ามรายงานว่า move-review เสร็จสมบูรณ์
+
+ห้ามข้าม PR โดยปริยาย แม้ implementation และ test จะผ่านแล้ว เว้นแต่ผู้ใช้อนุมัติ no-PR exception อย่างชัดเจน
+
 หลัง ticket อยู่ใน `obsidian/kanban/work-kanban-board.md (## REVIEW)`:
 
-- ใช้ `code-review` ถ้างานมี plan, หลาย script/หลาย layer (CLI + daemon), regression risk, หรือผู้ใช้ขอ review โดยตรง
-- ใช้ `security-review` เพิ่มเมื่อแตะ subprocess/ffmpeg invocation หรือ daemon socket input parsing
-- งานเล็กและ low-risk ใช้ lightweight review โดยเช็ก AC, scope, manual validation, และไม่มี obvious regression
+> การ review ต้องเริ่มด้วยการสั่ง Sonnet ด้วย prompt `/kanban review TTS-XXXX` เป็นอันดับแรกเสมอ
+
+- ใช้ `code-review` ถ้างานมี plan, แตะ module boundary `qwen_clone_tts.py` ↔ importer, แตะ daemon protocol, regression risk, หรือผู้ใช้ขอ review โดยตรง แต่ห้ามเรียกคำสั่ง `/code-review` เกิน 2 ครั้งต่อ ticket; หลังจากครบ 2 ครั้ง ให้ใช้ manual test เป็น review gate แทน
+- ใช้ `security-review` เพิ่มเมื่อเปลี่ยนวิธีประกอบ subprocess argv (ffmpeg/model) จาก input ภายนอก หรือวิธี parse daemon socket request
+- Manual test หลังครบโควตา `/code-review` ต้องตรวจ acceptance criteria, diff, regression, security ที่เกี่ยวข้อง, validation output (pytest + CLI/daemon run จริง) และสถานะ ticket/board โดยห้ามอ้างผลจากคำกล่าวอ้างของ agent เพียงอย่างเดียว
+- งานเล็กและ low-risk ใช้ lightweight review โดยเช็ก AC, scope, test, และไม่มี obvious regression
 
 ให้ผลลัพธ์เป็น:
 
@@ -307,7 +357,7 @@ Verdict: PASS / NEEDS FIX / BLOCKED
 Findings:
 - ...
 
-Missing manual validation:
+Missing tests:
 - ...
 
 Commands run:
@@ -319,7 +369,7 @@ Move to done: Yes / No
 ถ้า `NEEDS FIX`:
 
 1. แก้ issue ทันที
-2. รัน manual validation ที่เกี่ยวข้องอีกครั้ง
+2. รัน test ที่เกี่ยวข้องอีกครั้ง (`.venv/bin/python -m pytest -q` + manual CLI/daemon run ที่เกี่ยวข้อง)
 3. ใช้ `systematic-debugging` หรือ `debugging-and-error-recovery` เมื่อ root cause ยังไม่ชัด
 4. Review ซ้ำด้วย gate เดิม หรืออัปเกรดเป็น `security-review` หาก fix ทำให้งานมี security impact
 5. ห้ามย้ายไป done จนกว่า verdict เป็น `PASS`
@@ -328,11 +378,13 @@ Move to done: Yes / No
 
 1. เก็บ link ของ ticket ไว้ใน `(## REVIEW)`
 2. เพิ่ม `Blocked Notes` ใน ticket file
-3. ระบุสิ่งที่ต้องการจากผู้ใช้หรือ dependency ที่ขาด (เช่น ต้องมี hardware Apple Silicon จริงเพื่อ verify GPU/Metal behavior)
+3. ระบุสิ่งที่ต้องการจากผู้ใช้หรือ dependency ที่ขาด
 
 ### 7. Move To Done
 
 เมื่อ Review Gate ให้ verdict `PASS`:
+
+> การย้ายไป Done ต้องเริ่มด้วยการสั่ง Sonnet ด้วย prompt `/kanban done TTS-XXXX` เป็นอันดับแรกเสมอ
 
 1. เพิ่ม `Done Notes` แบบสั้นใน ticket file (รวม root cause ถ้าเป็น bugfix — โปรเจกต์นี้ไม่มี skill `post-mortem` แยก ให้บันทึกสั้น ๆ ตรงนี้แทน)
 2. ย้าย link จาก `(## REVIEW)` ไป `(## DONE)`
@@ -344,8 +396,8 @@ Move to done: Yes / No
 ```md
 ### Done Notes
 - Review Gate: PASS
-- Gates passed: lightweight review, manual CLI/daemon validation
-- Validation: manual run ผ่าน (`OK outputs/test.wav`)
+- Gates passed: lightweight review, tests
+- Validation: `.venv/bin/python -m pytest -q` + manual CLI/daemon run
 - Root cause (ถ้าเป็น bugfix): ...
 ```
 
@@ -358,7 +410,7 @@ Move to done: Yes / No
 1. เพิ่ม `Closed Notes` ใน ticket file
 2. ย้ายเฉพาะ link ของ ticket จาก board ปัจจุบันไป `(## CLOSED)`
 3. เปลี่ยน `Status:`/`status:` ใน ticket file เป็น `Closed`/`closed`
-4. ระบุเหตุผลที่ปิด เช่น duplicate, obsolete, out of scope, หรือ replaced by ticket อื่น
+4. ระบุเหตุผลที่ปิด เช่น duplicate, obsolete, out of scope, model แยกเสียงไม่ได้ (mood ticket), หรือ replaced by ticket อื่น
 
 ### 9. Close Sprint
 
@@ -371,7 +423,7 @@ Move to done: Yes / No
    - ถ้าไม่มี ให้ scan ไฟล์ `obsidian/kanban/splint-*.md` ที่มีอยู่ หาเลขสูงสุด แล้ว +1
 4. สร้าง `obsidian/kanban/splint-N-kanban-board.md` ด้วย format ที่มีเฉพาะ `## DONE` และ `## CLOSED` sections พร้อม links จากข้อ 1
 5. ลบ entries ของ tickets ที่ archive แล้วออกจาก `## DONE` และ `## CLOSED` ใน `work-kanban-board.md`
-6. ห้ามแตะ sections อื่น (`## BACKLOG`, `## PLAN`, `## TODO`, `## INPROGRESS`, `## REVIEW`) — tickets ที่ยังค้างอยู่ที่เดิมโดยอัตโนมัติ
+6. ห้ามแตะ sections อื่น (`## BACKLOG`, `## TODO`, `## PLAN`, `## INPROGRESS`, `## REVIEW`) — tickets ที่ยังค้างอยู่ที่เดิมโดยอัตโนมัติ
 7. ห้ามย้ายหรือ rename ticket files ใน `obsidian/kanban/tasks/`
 8. ห้ามเปลี่ยน `Status:`/`status:` ใน ticket files ใดๆ ทั้งสิ้น
 9. แสดงผลสรุป: ชื่อไฟล์ splint archive ที่สร้าง, tickets ที่ถูก archive, tickets ที่ยังคงอยู่บน active board
@@ -406,9 +458,9 @@ kanban-plugin: board
 - ย้ายสถานะด้วยการย้าย link ระหว่าง board sections และอัปเดต `Status:`/`status:` ใน ticket file
 - ห้าม duplicate ticket link ไว้หลาย board section พร้อมกัน
 - ห้ามเปลี่ยน path ของ ticket file ระหว่าง flow ปกติ
-- ห้ามย้าย ticket ไป done หาก review verdict ไม่ใช่ `PASS` หรือยังขาด manual validation ที่จำเป็น
-- ใช้ `security-review` เฉพาะ ticket ที่แตะ subprocess/ffmpeg invocation หรือ daemon socket input parsing; งานเสี่ยงต่ำใช้ lightweight review
-- หากมีการแก้ไขหลังเข้า review ให้ปรับ `Review Notes` และรัน verification ใหม่
+- ห้ามย้าย ticket ไป done หาก review verdict ไม่ใช่ `PASS` หรือยังขาด test ที่จำเป็น
+- ใช้ `security-review` เฉพาะ ticket ที่แตะการประกอบ subprocess command หรือ parse daemon socket input จาก input ภายนอกโดยตรง; งานเสี่ยงต่ำใช้ lightweight review
+- หากมีการแก้ไขหลังเข้า review ให้ปรับ `Review Notes` และรัน verification ใหม่ (pytest + manual run)
 - ต้องใช้ `using-superpowers` ก่อนเริ่ม ticket และใช้ skill อื่นตามความเหมาะสมของ scope
-- หาก ticket มี ambiguity หรือ plan risk ให้ย้อนกลับไป `/kanban plan`; หากมี bug report หรือ runtime failure ที่ root cause ยังไม่ชัด ให้ใช้ `systematic-debugging`/`debugging-and-error-recovery`
+- หาก ticket มี ambiguity หรือ plan risk ให้ย้อนกลับไป `/kanban plan`; หากมี bug report หรือ test/runtime/audio failure ที่ root cause ยังไม่ชัด ให้ใช้ `systematic-debugging`/`debugging-and-error-recovery`
 - ถ้ามีไฟล์เปลี่ยนแปลงที่ไม่ได้เกี่ยวกับ ticket ห้าม revert เอง ให้ทำงานเฉพาะ scope ของ ticket
