@@ -44,6 +44,27 @@ def test_detect_mood_earlier_entry_wins():
     assert detect_mood("555 แต่ก็เศร้านะ") == "giggle"
 
 
+def test_detect_mood_thai_pouty():
+    assert detect_mood("งอนแล้วนะ ไม่คุยด้วย") == "pouty"
+
+
+def test_detect_mood_english_worried():
+    assert detect_mood("I am so worried about tomorrow") == "worried"
+
+
+def test_detect_mood_japanese_shy():
+    assert detect_mood("照れくさいな、もう") == "shy"
+
+
+def test_detect_mood_thai_proud():
+    assert detect_mood("ภูมิใจในตัวเธอมากเลย") == "proud"
+
+
+def test_detect_mood_english_angry_still_wins_over_pouty():
+    # "furious" ยัง match angry (entry มาก่อน pouty)
+    assert detect_mood("I am so furious right now") == "angry"
+
+
 def test_every_keyword_mood_has_canonical_emoji():
     for _needles, mood in MOOD_KEYWORDS:
         assert mood in MOOD_EMOJI, f"{mood!r} has no MOOD_EMOJI entry"

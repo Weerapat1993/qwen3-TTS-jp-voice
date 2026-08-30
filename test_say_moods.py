@@ -18,6 +18,7 @@ def test_emoji_mood_covers_expected_moods():
     assert set(EMOJI_MOOD.values()) == {
         "excited", "giggle", "surprised", "sad", "angry",
         "sleepy", "whisper", "gentle", "bored", "storyteller",
+        "pouty", "shy", "proud", "worried",
     }
 
 
@@ -126,3 +127,20 @@ def test_mood_emoji_keys_are_real_presets():
 
 def test_mood_emoji_covers_every_evocative_mood():
     assert set(MOOD_EMOJI) == set(EMOJI_MOOD.values())
+
+
+def test_emoji_mood_keys_are_single_codepoint():
+    # extract_mood() iterate ทีละ char -> ทุก key ต้องเป็น codepoint เดี่ยว
+    for emoji in EMOJI_MOOD:
+        assert len(emoji) == 1, f"{emoji!r} is not a single codepoint"
+
+
+def test_emoji_mood_has_no_duplicate_keys():
+    # dict literal กันซ้ำอยู่แล้ว แต่ assert ความตั้งใจว่า emoji ใหม่ไม่ทับของเดิม
+    for mood in ("pouty", "shy", "proud", "worried"):
+        assert mood in set(EMOJI_MOOD.values())
+
+
+def test_extract_mood_new_moods_round_trip():
+    for mood in ("pouty", "shy", "proud", "worried"):
+        assert extract_mood(f"{MOOD_EMOJI[mood]} ข้อความ") == ("ข้อความ", mood)
