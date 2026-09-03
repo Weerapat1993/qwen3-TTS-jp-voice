@@ -465,8 +465,16 @@ def main() -> int:
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
+        voice = "Liino"
+        if "--voice" in rest:
+            i = rest.index("--voice")
+            voice = rest[i + 1] if i + 1 < len(rest) else None
+            rest = rest[:i] + rest[i + 2:]
+            if not voice:
+                print("ERROR: --voice requires a value", file=sys.stderr)
+                return 2
         from voice_store import read_instruction
-        voice_default = read_instruction("Liino")
+        voice_default = read_instruction(voice)
         try:
             segments = split_mood_segments(text)
         except ValueError as e:
@@ -485,9 +493,9 @@ def main() -> int:
             except ValueError as e:
                 print(f"ERROR: {e}", file=sys.stderr)
                 return 2
-            return _run("Liino", seg_text, out_path, instruct,
+            return _run(voice, seg_text, out_path, instruct,
                         mp3="--mp3" in rest, lang=lang)
-        return _run_multi("Liino", segments, voice_default, out_path,
+        return _run_multi(voice, segments, voice_default, out_path,
                           mp3="--mp3" in rest, lang=lang, mood=mood)
 
     ap = argparse.ArgumentParser()

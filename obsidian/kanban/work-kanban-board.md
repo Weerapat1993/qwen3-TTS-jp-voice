@@ -6,6 +6,8 @@ kanban-plugin: board
 
 ## BACKLOG
 
+- [TTS-1014](tasks/TTS-1014.md): ปรับปรุงความเป็นธรรมชาติของ voice clone (ref clip + transcript + instruct + generation params)
+
 ## TODO
 
 ## PLAN
