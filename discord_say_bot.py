@@ -43,10 +43,11 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
 # reuse ของเดิมจาก qwen_clone_tts.py ทั้งหมด — ห้าม duplicate ค่า/logic
-from qwen_clone_tts import LANG_CODES, MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
+from qwen_clone_tts import LANG_CODES, MAX_CHARS, MOOD_PRESETS, _run_multi, _try_daemon, resolve_instruct  # noqa: E402
 from say_moods import MOOD_EMOJI, extract_mood, first_line_over_limit, parse_lines  # noqa: E402
 from stt_transcribe import WHISPER_MODEL, probe_duration, transcribe as run_stt  # noqa: E402
 from transcribe_mood import detect_mood  # noqa: E402
+import translate_text  # noqa: E402
 import voice_store  # noqa: E402
 from voice_store import VoiceStoreError  # noqa: E402
 
@@ -763,6 +764,180 @@ async def voice_clone_test(interaction: discord.Interaction, name: str,
     print(f"discord_say_bot: voice-clone test guild={interaction.guild.id} "
           f"name={clean} mood={mood} chars={len(spoken)} gen_s={gen_s:.2f}",
           file=sys.stderr, flush=True)
+
+
+# ---------- /translate (TTS-1013) ----------
+
+# source_lang choice ("auto"/"ja"/"en"/"th") -> stt_transcribe.transcribe()'s
+# language param ("auto" -> None ให้ Whisper เดาเอง จากช่วงต้นเสียง)
+_TRANSLATE_SOURCE_STT_LANG: dict[str, str | None] = {
+    "auto": None, "ja": "ja", "en": "en", "th": "th",
+}
+
+# target_lang ("en"/"th") -> qwen_clone_tts.LANG_CODES entry สำหรับ TTS —
+# ไทยไม่มี entry เฉพาะใน LANG_CODES (โมเดลไม่รองรับไทยตรง ๆ) -> ใช้ "auto"
+_TRANSLATE_TARGET_TTS_LANG: dict[str, str] = {"en": "english", "th": "auto"}
+
+
+@tree.command(
+    name="translate",
+    description="อัปโหลดเสียง โคลนเสียงชั่วคราว แปลเป็น EN/TH แล้วพูดด้วยเสียงนั้น")
+@app_commands.guild_only()
+@app_commands.describe(
+    file="ไฟล์เสียง .mp3 หรือ .wav (≤ 20 MB, ≤ 10 นาที)",
+    source_lang="ภาษาต้นฉบับที่พูดในไฟล์ (ไม่เลือก = ตรวจอัตโนมัติ)",
+    target_lang="ภาษาที่จะแปลไป (ไม่เลือก = ทั้งอังกฤษและไทย)")
+@app_commands.choices(
+    source_lang=[
+        app_commands.Choice(name="ตรวจอัตโนมัติ", value="auto"),
+        app_commands.Choice(name="ญี่ปุ่น", value="ja"),
+        app_commands.Choice(name="อังกฤษ", value="en"),
+        app_commands.Choice(name="ไทย", value="th"),
+    ],
+    target_lang=[
+        app_commands.Choice(name="อังกฤษ", value="en"),
+        app_commands.Choice(name="ไทย", value="th"),
+        app_commands.Choice(name="ทั้งคู่", value="both"),
+    ])
+async def translate_cmd(interaction: discord.Interaction,
+                        file: discord.Attachment,
+                        source_lang: str | None = None,
+                        target_lang: str | None = None) -> None:
+    # pre-defer validation — ext/size เหมือน /transcribe (TTS-1005), reuse
+    # ค่า TRANSCRIBE_MAX_BYTES/TRANSCRIBE_MAX_DURATION_S ตรง ๆ ไม่ duplicate
+    if not file.filename.lower().endswith((".mp3", ".wav")):
+        await interaction.response.send_message(
+            "ไฟล์ต้องเป็น `.mp3` หรือ `.wav`", ephemeral=True)
+        return
+    if file.size > TRANSCRIBE_MAX_BYTES:
+        await interaction.response.send_message(
+            "ไฟล์ใหญ่เกิน 20 MB", ephemeral=True)
+        return
+
+    src_choice = source_lang or "auto"
+    target_choice = target_lang or "both"
+    targets = ["en", "th"] if target_choice == "both" else [target_choice]
+
+    # STT + MT + TTS ช้ากว่า 3 วิแน่ -> defer ก่อน (spinner เห็นเฉพาะคนสั่ง)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    ext = ".mp3" if file.filename.lower().endswith(".mp3") else ".wav"
+    src_path = os.path.join(
+        tempfile.gettempdir(),
+        f"qwen_translate_{os.getpid()}_{int(time.time()*1000)}{ext}")
+    # ชื่อเสียงชั่วคราว — sanitize_name() ของ voice_store ไม่มีทางสร้างชื่อขึ้นต้น
+    # ด้วย "_" ได้เอง (ADR-0002) จึงชนกับเสียงจริงไม่ได้; ลบทิ้งใน finally เสมอ
+    ephemeral_name = f"_translate_{interaction.id}"
+    ref_wav, ref_txt, ref_instruct = voice_store.voice_paths(ephemeral_name)
+    part_paths: list[str] = []
+
+    def _cleanup() -> None:
+        for p in (src_path, ref_wav, ref_txt, ref_instruct, *part_paths):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    try:
+        try:
+            await file.save(src_path)
+        except discord.DiscordException as e:  # noqa: BLE001
+            await interaction.followup.send(
+                f"ดาวน์โหลดไฟล์ไม่สำเร็จ: {e}", ephemeral=True)
+            return
+
+        try:
+            duration = await asyncio.to_thread(probe_duration, src_path)
+        except RuntimeError as e:
+            print(f"discord_say_bot: translate probe error: {e}",
+                  file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                "อ่านไฟล์เสียงไม่สำเร็จ (ไฟล์เสียหายหรือไม่ใช่ไฟล์เสียง)",
+                ephemeral=True)
+            return
+        if duration > TRANSCRIBE_MAX_DURATION_S:
+            await interaction.followup.send(
+                f"เสียงยาวเกิน 10 นาที ({duration / 60:.1f} นาที)",
+                ephemeral=True)
+            return
+
+        # ตัด ref clip สำหรับโคลนเสียงชั่วคราว (REF_TRIM_SECONDS วิแรก) — Transcript
+        # ยังใช้ src_path ต้นฉบับเต็มไฟล์ ไม่ใช่ ref_wav ที่ถูกตัดแล้ว
+        try:
+            await asyncio.to_thread(
+                voice_store.prepare_ref_audio, src_path, ref_wav)
+        except VoiceStoreError as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+
+        stt_lang = _TRANSLATE_SOURCE_STT_LANG[src_choice]
+        try:
+            lines = await asyncio.to_thread(run_stt, src_path, stt_lang)
+        except Exception as e:  # noqa: BLE001
+            print(f"discord_say_bot: translate STT error: {e}",
+                  file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                f"ถอดเสียงไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        transcript = " ".join(lines).strip()
+        if not transcript:
+            await interaction.followup.send(
+                "ถอดเสียงไม่พบข้อความ (เสียงเงียบหรือไม่มีคำพูด)",
+                ephemeral=True)
+            return
+
+        # target_lang=both: ล้มเหลวข้างใดข้างหนึ่ง = ทั้งคำขอ fail — generate ทุก
+        # part ให้เสร็จก่อนค่อยส่ง ไม่มีการส่งบางส่วน (Decisions ของ TTS-1013)
+        results: list[tuple[str, str]] = []  # (target_lang, wav_path)
+        for tgt in targets:
+            try:
+                translation = await asyncio.to_thread(
+                    translate_text.translate, transcript, tgt)
+            except Exception as e:  # noqa: BLE001
+                print(f"discord_say_bot: translate MT error target={tgt}: {e}",
+                      file=sys.stderr, flush=True)
+                await interaction.followup.send(
+                    f"แปลภาษาไม่สำเร็จ ({tgt}): {e}", ephemeral=True)
+                return
+            translation = translation.strip()
+            if not translation:
+                await interaction.followup.send(
+                    f"แปลภาษาไม่สำเร็จ ({tgt}): ผลลัพธ์ว่างเปล่า", ephemeral=True)
+                return
+
+            # mood auto-detect ต่อ Translation แยกกันคนละภาษา (เหมือน /transcribe)
+            # -> resolve_instruct() ถูกเรียกภายใน _run_multi() จาก mood_key นี้
+            mood = detect_mood(translation)
+            part_wav = os.path.join(
+                tempfile.gettempdir(),
+                f"qwen_translate_{os.getpid()}_{int(time.time()*1000)}_{tgt}.wav")
+            part_paths.append(part_wav)
+            tts_lang = _TRANSLATE_TARGET_TTS_LANG[tgt]
+            ret = await asyncio.to_thread(
+                _run_multi, ephemeral_name, [(mood, translation)], None,
+                part_wav, False, tts_lang, None)
+            if ret != 0 or not os.path.exists(part_wav):
+                await interaction.followup.send(
+                    f"สร้างเสียงไม่สำเร็จ ({tgt})", ephemeral=True)
+                return
+            results.append((tgt, part_wav))
+
+        # ทุก part สำเร็จแล้ว -> ส่ง Transcript + ไฟล์เสียงทั้งหมดพร้อมกันครั้งเดียว
+        no_ping = discord.AllowedMentions.none()
+        safe_transcript = transcript.replace("```", "`​`​`")
+        files = [
+            discord.File(p, filename=f"translate_{interaction.id}_{tgt}.wav")
+            for tgt, p in results]
+        await interaction.channel.send(
+            f"📝 ต้นฉบับ:\n```\n{safe_transcript}\n```",
+            files=files, allowed_mentions=no_ping)
+        await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
+        print(f"discord_say_bot: translate guild={interaction.guild.id} "
+              f"bytes={file.size} dur_s={duration:.1f} source={src_choice} "
+              f"targets={targets} transcript_len={len(transcript)}",
+              file=sys.stderr, flush=True)
+    finally:
+        _cleanup()
 
 
 def main() -> int:
