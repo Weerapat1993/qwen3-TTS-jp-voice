@@ -10,11 +10,11 @@ kanban-plugin: board
 
 ## PLAN
 
-- [TTS-1014](tasks/TTS-1014.md): ปรับปรุงความเป็นธรรมชาติของ voice clone (ref clip + transcript + instruct + generation params)
-
 ## INPROGRESS
 
 ## REVIEW
+
+- [TTS-1014](tasks/TTS-1014.md): ปรับปรุงความเป็นธรรมชาติของ voice clone (ref clip + transcript + instruct + generation params)
 
 - [TTS-1013](tasks/TTS-1013.md): /translate — upload audio, voice-clone, JP→EN/TH translate, TTS output
 
