@@ -8,13 +8,13 @@ kanban-plugin: board
 
 ## TODO
 
-- [TTS-1013](tasks/TTS-1013.md): /translate — upload audio, voice-clone, JP→EN/TH translate, TTS output
-
 ## PLAN
 
 ## INPROGRESS
 
 ## REVIEW
+
+- [TTS-1013](tasks/TTS-1013.md): /translate — upload audio, voice-clone, JP→EN/TH translate, TTS output
 
 ## DONE
 

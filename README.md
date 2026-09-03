@@ -56,6 +56,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 brew install ffmpeg
+python fix_mlx_audio_assets.py  # one-time: patches missing mlx-audio whisper assets, see script docstring
 ```
 
 ### 2. Download models
