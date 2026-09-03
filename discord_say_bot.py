@@ -887,6 +887,12 @@ async def translate_cmd(interaction: discord.Interaction,
                 "ถอดเสียงไม่พบข้อความ (เสียงเงียบหรือไม่มีคำพูด)",
                 ephemeral=True)
             return
+        # เขียน ref_txt จาก transcript ที่ถอดไว้แล้ว — ถ้าไม่เขียน ref_text จะเป็น
+        # None แล้ว mlx_audio จะ auto-STT ref_audio เองภายใน generate_audio(),
+        # ซึ่ง whisper tokenizer asset หายไปจาก mlx-audio package (upstream bug)
+        # ทำให้ job พังด้วย FileNotFoundError: multilingual.tiktoken
+        with open(ref_txt, "w", encoding="utf-8") as f:
+            f.write(transcript)
 
         # target_lang=both: ล้มเหลวข้างใดข้างหนึ่ง = ทั้งคำขอ fail — generate ทุก
         # part ให้เสร็จก่อนค่อยส่ง ไม่มีการส่งบางส่วน (Decisions ของ TTS-1013)

@@ -17,7 +17,10 @@ The primary real-world consumer is a Hermes agent (separate project) that shells
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 brew install ffmpeg
+python fix_mlx_audio_assets.py  # one-time, re-run after any mlx-audio reinstall/upgrade
 ```
+
+`fix_mlx_audio_assets.py` patches an upstream gap: the pinned `mlx-audio` git commit ships without `mlx_audio/stt/models/whisper/assets/*.tiktoken` (missing from the upstream repo itself, not just this install). Without it, any voice-clone TTS call that reaches `generate_audio()` with no (or empty) `ref_text` crashes with `FileNotFoundError: ...multilingual.tiktoken` — it copies the identical files that already ship inside the pinned `mlx-whisper` dependency. Safe to re-run (idempotent).
 
 Requires Python 3.10+ (code uses `str | None` syntax). **Never use system `python3`** — if it's <3.10 the CLI fails silently-ish with `TTS chunk 1 produced no final audio`. Always use `.venv/bin/python`.
 
