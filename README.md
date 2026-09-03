@@ -12,7 +12,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 
 | Feature | What it does | Entry point |
 |---------|---------------|--------------|
-| **Voice Cloning** | Clone any voice from a 5-10 second reference `.wav` clip | `main.py` (menu) / `qwen_clone_tts.py` |
+| **Voice Cloning** | Clone any voice from a 10-15 second reference `.wav` clip | `main.py` (menu) / `qwen_clone_tts.py` |
 | **Voice Design** | Create a new voice from a text description (e.g. "deep narrator") | `main.py` (menu) |
 | **Custom Voice** | 9 built-in preset voices with emotion + speed control | `main.py` (menu) |
 | **Scriptable CLI** | Generate audio from a single flag-based command, no prompts | `qwen_clone_tts.py --text ...` |
@@ -136,6 +136,16 @@ Select:
 ## CLI Reference (scripting / AI agents)
 
 `qwen_clone_tts.py` clones a voice from `voices/<name>.wav` (+ optional `voices/<name>.txt` reference transcript) and writes an audio file — no interactive prompts. It automatically uses the background daemon (see below) if one is running, and falls back to loading the model itself if not.
+
+### Reference audio guidelines
+
+Naturalness of the cloned voice depends heavily on the ref clip, not just on `--instruct`. Findings from tuning `basti`/`liinonew`/`Liino` (TTS-1014):
+
+- **Length sweet spot: 10–15 seconds.** Much shorter clips clone timbre fine but prosody stays flat/stiff; much longer clips risk the model hanging or looping (it doesn't reliably find the EOS token past ~15–20s).
+- **Pick a segment with varied intonation** (several sentences with natural pauses between them), not a single flat monotone line — the clone inherits the ref's prosody, not just its timbre.
+- **Add ~0.5s of silence padding** to the end of the trimmed clip (`ffmpeg -af "apad=pad_dur=0.5"`) before using it — without this, generated speech can clip/cut off right after the first token, because the model conditions on phonemes at the tail of the ref clip.
+- **`voices/<name>.txt` must be the exact transcript of the ref clip**, not a description of the speaker/character. A correct transcript (used as `ref_text` in ICL mode) measurably improves speaker similarity; a wrong or stale one after swapping the `.wav` degrades it silently (no error — it's just a worse clone).
+- **`voices/<name>.instruct.txt` should state pace/rhythm as an objective cue** (e.g. `"natural conversational rhythm, occasional short pauses between sentences"`), not just an adjective like `"natural"` — the model responds to concrete pacing instructions much more than to vague ones.
 
 ```bash
 source .venv/bin/activate
