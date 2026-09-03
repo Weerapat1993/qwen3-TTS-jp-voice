@@ -43,7 +43,7 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
 # reuse ของเดิมจาก qwen_clone_tts.py ทั้งหมด — ห้าม duplicate ค่า/logic
-from qwen_clone_tts import LANG_CODES, MAX_CHARS, MOOD_PRESETS, _run_multi, _try_daemon, resolve_instruct  # noqa: E402
+from qwen_clone_tts import LANG_CODES, MAX_CHARS, MOOD_PRESETS, _try_daemon, resolve_instruct  # noqa: E402
 from say_moods import MOOD_EMOJI, extract_mood, first_line_over_limit, parse_lines  # noqa: E402
 from stt_transcribe import WHISPER_MODEL, probe_duration, transcribe as run_stt  # noqa: E402
 from transcribe_mood import detect_mood  # noqa: E402
@@ -763,7 +763,6 @@ async def voice_clone_test(interaction: discord.Interaction, name: str,
     print(f"discord_say_bot: voice-clone test guild={interaction.guild.id} "
           f"name={clean} mood={mood} chars={len(spoken)} gen_s={gen_s:.2f}",
           file=sys.stderr, flush=True)
-
 
 
 def main() -> int:
