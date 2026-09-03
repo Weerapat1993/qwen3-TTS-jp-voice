@@ -896,7 +896,7 @@ async def translate_cmd(interaction: discord.Interaction,
 
         # target_lang=both: ล้มเหลวข้างใดข้างหนึ่ง = ทั้งคำขอ fail — generate ทุก
         # part ให้เสร็จก่อนค่อยส่ง ไม่มีการส่งบางส่วน (Decisions ของ TTS-1013)
-        results: list[tuple[str, str]] = []  # (target_lang, wav_path)
+        results: list[tuple[str, str, str]] = []  # (target_lang, wav_path, translation)
         mt_s = 0.0
         tts_s = 0.0
         for tgt in targets:
@@ -934,17 +934,23 @@ async def translate_cmd(interaction: discord.Interaction,
                 await interaction.followup.send(
                     f"สร้างเสียงไม่สำเร็จ ({tgt})", ephemeral=True)
                 return
-            results.append((tgt, part_wav))
+            results.append((tgt, part_wav, translation))
         total_s = time.time() - t0
 
-        # ทุก part สำเร็จแล้ว -> ส่ง Transcript + ไฟล์เสียงทั้งหมดพร้อมกันครั้งเดียว
+        # ทุก part สำเร็จแล้ว -> ส่ง Transcript + คำแปลทุกภาษา + ไฟล์เสียงทั้งหมด
+        # พร้อมกันครั้งเดียว — โชว์คำแปลด้วย (ไม่ใช่แค่ transcript ต้นฉบับ) เพื่อ
+        # ให้ debug ได้เองว่า MT แปลถูกภาษา/มีอักขระแปลกปนมาหรือไม่ ถ้าเสียงที่ได้
+        # ฟังดูผิดภาษา
         no_ping = discord.AllowedMentions.none()
         safe_transcript = transcript.replace("```", "`​`​`")
+        translation_blocks = "\n".join(
+            f"🌐 คำแปล ({tgt}):\n```\n{tr.replace('```', '`​`​`')}\n```"
+            for tgt, _, tr in results)
         files = [
             discord.File(p, filename=f"translate_{interaction.id}_{tgt}.wav")
-            for tgt, p in results]
+            for tgt, p, _ in results]
         await interaction.channel.send(
-            f"📝 ต้นฉบับ:\n```\n{safe_transcript}\n```",
+            f"📝 ต้นฉบับ:\n```\n{safe_transcript}\n```\n{translation_blocks}",
             files=files, allowed_mentions=no_ping)
         await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
         print(f"discord_say_bot: translate guild={interaction.guild.id} "
