@@ -77,11 +77,6 @@ def build_prompt(text: str, target_lang: str) -> str:
     lang_name = TARGET_LANG_NAMES[target_lang]
     return (
         f"Translate the following text into {lang_name}. "
-        f"Write the ENTIRE output in {lang_name} script only — never leave "
-        "words in their original language or script (English, Chinese, "
-        "Japanese, etc.), even idioms, names, or terms with no natural "
-        f"translation. For those, spell them out phonetically in {lang_name} "
-        "instead. Do not switch languages partway through. "
         "Output ONLY the translation itself — no notes, no explanations, "
         "no quotes or labels around it.\n\n"
         f"{text}"
