@@ -870,6 +870,7 @@ async def translate_cmd(interaction: discord.Interaction,
             await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
             return
 
+        t0 = time.time()
         stt_lang = _TRANSLATE_SOURCE_STT_LANG[src_choice]
         try:
             lines = await asyncio.to_thread(run_stt, src_path, stt_lang)
@@ -879,6 +880,7 @@ async def translate_cmd(interaction: discord.Interaction,
             await interaction.followup.send(
                 f"ถอดเสียงไม่สำเร็จ: {e}", ephemeral=True)
             return
+        stt_s = time.time() - t0
         transcript = " ".join(lines).strip()
         if not transcript:
             await interaction.followup.send(
@@ -889,7 +891,10 @@ async def translate_cmd(interaction: discord.Interaction,
         # target_lang=both: ล้มเหลวข้างใดข้างหนึ่ง = ทั้งคำขอ fail — generate ทุก
         # part ให้เสร็จก่อนค่อยส่ง ไม่มีการส่งบางส่วน (Decisions ของ TTS-1013)
         results: list[tuple[str, str]] = []  # (target_lang, wav_path)
+        mt_s = 0.0
+        tts_s = 0.0
         for tgt in targets:
+            t1 = time.time()
             try:
                 translation = await asyncio.to_thread(
                     translate_text.translate, transcript, tgt)
@@ -899,6 +904,7 @@ async def translate_cmd(interaction: discord.Interaction,
                 await interaction.followup.send(
                     f"แปลภาษาไม่สำเร็จ ({tgt}): {e}", ephemeral=True)
                 return
+            mt_s += time.time() - t1
             translation = translation.strip()
             if not translation:
                 await interaction.followup.send(
@@ -913,14 +919,17 @@ async def translate_cmd(interaction: discord.Interaction,
                 f"qwen_translate_{os.getpid()}_{int(time.time()*1000)}_{tgt}.wav")
             part_paths.append(part_wav)
             tts_lang = _TRANSLATE_TARGET_TTS_LANG[tgt]
+            t2 = time.time()
             ret = await asyncio.to_thread(
                 _run_multi, ephemeral_name, [(mood, translation)], None,
                 part_wav, False, tts_lang, None)
+            tts_s += time.time() - t2
             if ret != 0 or not os.path.exists(part_wav):
                 await interaction.followup.send(
                     f"สร้างเสียงไม่สำเร็จ ({tgt})", ephemeral=True)
                 return
             results.append((tgt, part_wav))
+        total_s = time.time() - t0
 
         # ทุก part สำเร็จแล้ว -> ส่ง Transcript + ไฟล์เสียงทั้งหมดพร้อมกันครั้งเดียว
         no_ping = discord.AllowedMentions.none()
@@ -934,7 +943,9 @@ async def translate_cmd(interaction: discord.Interaction,
         await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
         print(f"discord_say_bot: translate guild={interaction.guild.id} "
               f"bytes={file.size} dur_s={duration:.1f} source={src_choice} "
-              f"targets={targets} transcript_len={len(transcript)}",
+              f"targets={targets} transcript_len={len(transcript)} "
+              f"stt_s={stt_s:.2f} mt_s={mt_s:.2f} tts_s={tts_s:.2f} "
+              f"total_s={total_s:.2f}",
               file=sys.stderr, flush=True)
     finally:
         _cleanup()
