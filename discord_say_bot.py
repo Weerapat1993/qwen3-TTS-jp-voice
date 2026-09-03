@@ -594,17 +594,33 @@ async def voice_clone_create(interaction: discord.Interaction, name: str,
                 f"ถอดเสียงอ้างอิงไม่สำเร็จ: {e}", ephemeral=True)
             return
         transcript = " ".join(lines).strip()
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(transcript + "\n")
+        if transcript:
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(transcript + "\n")
+        elif os.path.exists(txt_path):
+            # overwrite เสียงเดิมที่เคยมี transcript แต่รอบนี้ถอดได้ว่าง — ลบทิ้ง
+            # ไม่งั้น has_transcript จะโกหกว่ามี (ไฟล์เก่าค้าง ไม่ตรงกับเสียงใหม่)
+            os.remove(txt_path)
         if instruction:
             voice_store.write_instruction(clean, instruction)
 
-        preview = transcript or "(ถอดเสียงไม่พบข้อความ — เสียงอาจไม่มีคำพูด)"
-        safe = preview.replace("```", "`​`​`")
+        if transcript:
+            safe = transcript.replace("```", "`​`​`")
+            body = (f"ตรวจ transcript ที่ถอดได้ (แก้ที่ `voices/{clean}.txt` ได้):\n"
+                     f"```\n{safe}\n```")
+        else:
+            # ไม่เขียน .txt ว่างเปล่าไว้ — ปล่อยว่างจริง (ref_text=None) ให้ตรงกับ
+            # has_transcript=False ใน /voice-clone list; แต่เตือนไว้เพราะเสี่ยงชน
+            # บั๊ก upstream ของ mlx-audio (ดู fix_mlx_audio_assets.py) ตอน generate
+            # ถ้ายังไม่ได้รัน fix นั้นไว้
+            body = ("⚠️ ถอดเสียงอ้างอิงไม่พบข้อความ (เสียงเงียบ/ไม่มีคำพูด) — ไม่มี "
+                    f"transcript ให้ ใส่เองที่ `voices/{clean}.txt` ก่อนใช้งานจะ "
+                    "ปลอดภัยกว่า ไม่งั้นตอน generate เสียงจะพึ่ง auto-transcribe "
+                    "ภายในของ mlx-audio ซึ่งเคยพังถ้ายังไม่ได้รัน "
+                    "`fix_mlx_audio_assets.py`")
         await interaction.followup.send(
-            f"✅ สร้างเสียง `{clean}` แล้ว ({dur:.1f}s ต้นฉบับ)\n"
-            f"ตรวจ transcript ที่ถอดได้ (แก้ที่ `voices/{clean}.txt` ได้):\n"
-            f"```\n{safe}\n```", ephemeral=True)
+            f"✅ สร้างเสียง `{clean}` แล้ว ({dur:.1f}s ต้นฉบับ)\n{body}",
+            ephemeral=True)
         print(f"discord_say_bot: voice-clone create guild={interaction.guild.id} "
               f"name={clean} src_bytes={file.size} dur_s={dur:.1f} "
               f"transcript_len={len(transcript)} instruction={bool(instruction)}",
