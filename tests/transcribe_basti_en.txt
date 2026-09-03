@@ -1,5 +1,5 @@
-1	[mood:worried] Darling, those other Dolls on the Elmo... they're just collenagues from work, right?
-2	[mood:gentle] I link anything you give me, Darling!
-3	[mood:shy] Don't be too nice to me... I'm avery greedy girl~
-4	[mood:proud] Let me do more for you, I'll do anything you want, Because I want... to be more useful to you, Darling!
-5	[mood:whisper] Shhh-Don't let the others hear you. Some things are better when done in secret~
+[mood:worried] Darling, those other Dolls on the Elmo... they're just collenagues from work, right?
+[mood:gentle] I link anything you give me, Darling!
+[mood:shy] Don't be too nice to me... I'm avery greedy girl~
+[mood:proud] Let me do more for you, I'll do anything you want, Because I want... to be more useful to you, Darling!
+[mood:whisper] Shhh-Don't let the others hear you. Some things are better when done in secret~
