@@ -14,12 +14,11 @@ kanban-plugin: board
 
 ## REVIEW
 
-- [TTS-1014](tasks/TTS-1014.md): ปรับปรุงความเป็นธรรมชาติของ voice clone (ref clip + transcript + instruct + generation params)
-
 - [TTS-1013](tasks/TTS-1013.md): /translate — upload audio, voice-clone, JP→EN/TH translate, TTS output
 
 ## DONE
 
+- [TTS-1014](tasks/TTS-1014.md): ปรับปรุงความเป็นธรรมชาติของ voice clone (ref clip + transcript + instruct + generation params)
 - [TTS-1012](tasks/TTS-1012.md): Inline mood tag ([mood:xxx]) support for --stdin batch text
 - [TTS-1011](tasks/TTS-1011.md): Remove MOOD_PRESETS["long"] / DEFAULT_INSTRUCT_LONG (superseded by per-voice set-default instruction)
 - [TTS-1010](tasks/TTS-1010.md): /say voice: + configurable default voice (/voice-clone set-default) + resolve_instruct() voice-default
