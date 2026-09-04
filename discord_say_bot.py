@@ -13,6 +13,11 @@
 `export_tts:true` = ส่งออกเป็นไฟล์ `.wav` แนบในแชทแทนการเล่นเสียง — ไม่ต้องเข้า
 voice channel (หลายบรรทัด/segment จะถูก concat ด้วย ffmpeg เป็นไฟล์เดียวก่อนแนบ)
 
+`is_transcript:true` (ต้องคู่กับ `export_tts:true`) = แนบ `transcript.json` เพิ่มมา
+อีกไฟล์ — timeline start/end คำนวณจากความยาว (ffprobe) ของแต่ละบรรทัด wav ที่ต่อกัน
+เป็น export_path จริง (ไม่ใช้ STT/Whisper — ข้อความรู้อยู่แล้วจากที่สั่งพูด) schema
+เดียวกับ hyperframes transcribe (flat array [{id, text, start, end}])
+
 Usage:
     .venv/bin/python discord_say_bot.py
 
@@ -35,6 +40,7 @@ Env vars:
 """
 import asyncio
 import io
+import json
 import os
 import sys
 import tempfile
@@ -205,7 +211,9 @@ async def _voice_autocomplete(
     file="ไฟล์ .txt สำหรับข้อความหลายบรรทัด (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB)",
     voice="เสียงที่จะใช้ (ไม่เลือก = default voice ที่ตั้งไว้ผ่าน /voice-clone set-default)",
     export_tts="ส่งออกเป็นไฟล์เสียง .wav แนบในแชทแทนการเล่นใน voice channel "
-                "(ไม่ต้องเข้า VC)")
+                "(ไม่ต้องเข้า VC)",
+    is_transcript="แนบ transcript.json (start/end ต่อบรรทัด คำนวณจากความยาว wav จริง "
+                  "แบบ hyperframes transcribe) คู่กับไฟล์เสียง — ต้องใช้กับ export_tts:true")
 @app_commands.choices(
     mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)],
     language=[app_commands.Choice(name=c, value=c)
@@ -216,7 +224,8 @@ async def say(interaction: discord.Interaction, text: str | None = None,
               language: str | None = None,
               file: discord.Attachment | None = None,
               voice: str | None = None,
-              export_tts: bool = False) -> None:
+              export_tts: bool = False,
+              is_transcript: bool = False) -> None:
     explicit_mood = mood  # ชื่อ preset ที่เลือกจาก dropdown หรือ None
     lang = language or "auto"  # ไม่เลือก = auto (choice list ไม่มี auto)
 
@@ -225,6 +234,12 @@ async def say(interaction: discord.Interaction, text: str | None = None,
         await interaction.response.send_message(
             "ใช้: `/say text:<ข้อความ>` (บรรทัดเดียว) หรือ `/say file:<x.txt>` "
             "(หลายบรรทัด) — เลือกอย่างใดอย่างหนึ่ง", ephemeral=True)
+        return
+
+    if is_transcript and not export_tts:
+        await interaction.response.send_message(
+            "`is_transcript:true` ต้องใช้คู่กับ `export_tts:true` — transcript.json "
+            "ถอดจากไฟล์เสียงที่ export เท่านั้น", ephemeral=True)
         return
 
     # เลือกเสียง: ระบุ voice: ต้องมีอยู่จริง, ไม่ระบุ = default voice ปัจจุบัน
@@ -396,14 +411,45 @@ async def say(interaction: discord.Interaction, text: str | None = None,
                     f"⚠️ รวมไฟล์เสียงไม่สำเร็จ: {r.stderr}", ephemeral=True)
                 return
 
+        transcript_path = None
+        if is_transcript:
+            # timeline จากความยาว wav ต่อบรรทัดจริง (ffprobe) ไม่ใช้ STT — ข้อความ
+            # รู้อยู่แล้วจาก jobs_meta/wav_paths อยู่ index ตรงกัน; ต่อกันแบบ concat
+            # ตรงๆ ไม่มี silence คั่น (ดู ffmpeg concat ด้านบน) จึงบวกสะสมตรงๆ ได้
+            try:
+                durations = [await asyncio.to_thread(probe_duration, p)
+                             for p in wav_paths]
+                entries = []
+                t = 0.0
+                for idx, (spoken, _instruct) in enumerate(jobs_meta):
+                    d = durations[idx]
+                    entries.append({"id": f"w{idx}", "text": spoken,
+                                     "start": round(t, 3), "end": round(t + d, 3)})
+                    t += d
+                transcript_path = f"{export_path}.transcript.json"
+                with open(transcript_path, "w", encoding="utf-8") as f:
+                    json.dump(entries, f, ensure_ascii=False, indent=2)
+            except Exception as e:  # noqa: BLE001 — ffprobe ล้มเหลว ไม่ทำให้ export เสียงพัง
+                transcript_path = None
+                await interaction.followup.send(
+                    f"⚠️ สร้าง transcript.json ไม่สำเร็จ ({e}) — ส่งเฉพาะไฟล์เสียง",
+                    ephemeral=True)
+
         try:
+            files = [discord.File(export_path, filename="say_export.wav")]
+            if transcript_path is not None:
+                files.append(discord.File(transcript_path, filename="transcript.json"))
             await interaction.channel.send(
-                f"🔊 ส่งออกเสียงแล้ว ({len(wav_paths)} บรรทัด)",
-                file=discord.File(export_path, filename="say_export.wav"))
+                f"🔊 ส่งออกเสียงแล้ว ({len(wav_paths)} บรรทัด)", files=files)
         finally:
             for p in wav_paths:
                 try:
                     os.remove(p)
+                except OSError:
+                    pass
+            if transcript_path is not None:
+                try:
+                    os.remove(transcript_path)
                 except OSError:
                     pass
             if tmpdir is not None:
@@ -414,7 +460,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
         print(f"discord_say_bot: exported say guild={interaction.guild.id} "
               f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
               f"explicit_mood={explicit_mood} lang={lang} chars={total_chars} "
-              f"voice={voice_clean}",
+              f"voice={voice_clean} is_transcript={is_transcript}",
               file=sys.stderr, flush=True)
         return
 
