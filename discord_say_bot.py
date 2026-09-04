@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Discord say bot — slash command `/say text:<ข้อความ> | file:<x.txt> [mood:<preset>]`
+"""Discord say bot — slash command
+`/say text:<ข้อความ> | file:<x.txt> [mood:<preset>] [export_tts:true]`
 
 `text` = ข้อความบรรทัดเดียว, `file` = `.txt` attachment สำหรับข้อความหลายบรรทัด
 (ต้องระบุอย่างใดอย่างหนึ่ง — XOR)
@@ -8,6 +9,9 @@
 `voice:` = ใช้ default voice ที่ตั้งไว้ผ่าน `/voice-clone set-default`, fallback
 `Liino` ถ้ายังไม่เคยตั้ง) ผ่าน tts_daemon fast path เท่านั้น (ไม่ fallback โหลดโมเดลเอง
 ถ้า daemon ล่ม — ดู Decision ใน obsidian/kanban/tasks/TTS-1001.md) แล้วเล่นในห้องตามคิวต่อ guild
+
+`export_tts:true` = ส่งออกเป็นไฟล์ `.wav` แนบในแชทแทนการเล่นเสียง — ไม่ต้องเข้า
+voice channel (หลายบรรทัด/segment จะถูก concat ด้วย ffmpeg เป็นไฟล์เดียวก่อนแนบ)
 
 Usage:
     .venv/bin/python discord_say_bot.py
@@ -199,7 +203,9 @@ async def _voice_autocomplete(
     mood="โทนเสียง (ไม่เลือก = auto จาก emoji หรือปกติ)",
     language="ภาษาที่โมเดลออกเสียง (ไม่เลือก = auto เดาจากข้อความ; ไทยใช้ auto)",
     file="ไฟล์ .txt สำหรับข้อความหลายบรรทัด (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB)",
-    voice="เสียงที่จะใช้ (ไม่เลือก = default voice ที่ตั้งไว้ผ่าน /voice-clone set-default)")
+    voice="เสียงที่จะใช้ (ไม่เลือก = default voice ที่ตั้งไว้ผ่าน /voice-clone set-default)",
+    export_tts="ส่งออกเป็นไฟล์เสียง .wav แนบในแชทแทนการเล่นใน voice channel "
+                "(ไม่ต้องเข้า VC)")
 @app_commands.choices(
     mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)],
     language=[app_commands.Choice(name=c, value=c)
@@ -209,7 +215,8 @@ async def say(interaction: discord.Interaction, text: str | None = None,
               mood: str | None = None,
               language: str | None = None,
               file: discord.Attachment | None = None,
-              voice: str | None = None) -> None:
+              voice: str | None = None,
+              export_tts: bool = False) -> None:
     explicit_mood = mood  # ชื่อ preset ที่เลือกจาก dropdown หรือ None
     lang = language or "auto"  # ไม่เลือก = auto (choice list ไม่มี auto)
 
@@ -310,12 +317,15 @@ async def say(interaction: discord.Interaction, text: str | None = None,
             return
         jobs_meta.append((spoken, instruct))
 
-    author_voice = getattr(interaction.user, "voice", None)
-    if author_voice is None or author_voice.channel is None:
-        await interaction.response.send_message(
-            "ต้องเข้า voice channel ก่อนถึงจะใช้คำสั่งนี้ได้", ephemeral=True)
-        return
-    voice_channel = author_voice.channel
+    voice_channel = None
+    if not export_tts:
+        author_voice = getattr(interaction.user, "voice", None)
+        if author_voice is None or author_voice.channel is None:
+            await interaction.response.send_message(
+                "ต้องเข้า voice channel ก่อนถึงจะใช้คำสั่งนี้ได้ "
+                "(หรือใช้ `export_tts:true` เพื่อส่งออกเป็นไฟล์แทน)", ephemeral=True)
+            return
+        voice_channel = author_voice.channel
 
     # ผ่าน validation หมดแล้ว — gen ช้ากว่า 3 วิ ต้อง defer ก่อน (spinner เห็นเฉพาะคนสั่ง)
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -348,6 +358,65 @@ async def say(interaction: discord.Interaction, text: str | None = None,
             return
         wav_paths.append(wav_path)
     gen_s = time.time() - t0
+
+    if export_tts:
+        export_path = wav_paths[0]
+        tmpdir = None
+        if len(wav_paths) > 1:
+            import shutil
+            import subprocess
+            if shutil.which("ffmpeg") is None:
+                for p in wav_paths:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+                await interaction.followup.send(
+                    "⚠️ ต้องมี ffmpeg เพื่อรวมหลายบรรทัดเป็นไฟล์เดียว", ephemeral=True)
+                return
+            tmpdir = tempfile.mkdtemp(prefix="qwen_say_export_")
+            list_file = os.path.join(tmpdir, "list.txt")
+            with open(list_file, "w", encoding="utf-8") as f:
+                for p in wav_paths:
+                    f.write(f"file '{p}'\n")
+            export_path = os.path.join(tmpdir, "export.wav")
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "concat", "-safe", "0", "-i", list_file,
+                 "-ar", "24000", "-ac", "1", export_path],
+                capture_output=True, text=True)
+            if r.returncode != 0 or not os.path.exists(export_path):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                for p in wav_paths:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+                await interaction.followup.send(
+                    f"⚠️ รวมไฟล์เสียงไม่สำเร็จ: {r.stderr}", ephemeral=True)
+                return
+
+        try:
+            await interaction.channel.send(
+                f"🔊 ส่งออกเสียงแล้ว ({len(wav_paths)} บรรทัด)",
+                file=discord.File(export_path, filename="say_export.wav"))
+        finally:
+            for p in wav_paths:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            if tmpdir is not None:
+                import shutil as _shutil
+                _shutil.rmtree(tmpdir, ignore_errors=True)
+
+        await interaction.followup.send("✅ ส่งออกไฟล์เสียงแล้ว", ephemeral=True)
+        print(f"discord_say_bot: exported say guild={interaction.guild.id} "
+              f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
+              f"explicit_mood={explicit_mood} lang={lang} chars={total_chars} "
+              f"voice={voice_clean}",
+              file=sys.stderr, flush=True)
+        return
 
     playback = _get_playback(interaction.guild)
     playback.ensure_worker()
