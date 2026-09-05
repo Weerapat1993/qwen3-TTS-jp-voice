@@ -436,7 +436,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
                     ephemeral=True)
 
         try:
-            files = [discord.File(export_path, filename="say_export.wav")]
+            files = [discord.File(export_path, filename="narration.wav")]
             if transcript_path is not None:
                 files.append(discord.File(transcript_path, filename="transcript.json"))
             await interaction.channel.send(
