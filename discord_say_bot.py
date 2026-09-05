@@ -395,7 +395,8 @@ async def say(interaction: discord.Interaction, text: str | None = None,
                 for p in wav_paths:
                     f.write(f"file '{p}'\n")
             export_path = os.path.join(tmpdir, "export.wav")
-            r = subprocess.run(
+            r = await asyncio.to_thread(
+                subprocess.run,
                 ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                  "-f", "concat", "-safe", "0", "-i", list_file,
                  "-ar", "24000", "-ac", "1", export_path],
