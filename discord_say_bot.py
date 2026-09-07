@@ -177,17 +177,24 @@ def _get_playback(guild: discord.Guild) -> GuildPlayback:
 
 @client.event
 async def on_ready() -> None:
-    if DISCORD_GUILD_ID:
-        guild = discord.Object(id=int(DISCORD_GUILD_ID))
-        tree.copy_global_to(guild=guild)
-        synced = await tree.sync(guild=guild)
-    else:
-        synced = await tree.sync()
-    print(f"discord_say_bot: logged in as {client.user} "
-          f"(slash cmds synced={len(synced)}, "
-          f"guild={DISCORD_GUILD_ID or 'global'}, "
-          f"idle_timeout={VC_IDLE_TIMEOUT_S:.0f}s)",
-          file=sys.stderr, flush=True)
+    try:
+        if DISCORD_GUILD_ID:
+            guild = discord.Object(id=int(DISCORD_GUILD_ID))
+            tree.copy_global_to(guild=guild)
+            synced = await tree.sync(guild=guild)
+        else:
+            synced = await tree.sync()
+        print(f"discord_say_bot: logged in as {client.user} "
+              f"(slash cmds synced={len(synced)}, "
+              f"guild={DISCORD_GUILD_ID or 'global'}, "
+              f"idle_timeout={VC_IDLE_TIMEOUT_S:.0f}s)",
+              file=sys.stderr, flush=True)
+    except Exception as e:
+        # sync ล้ม (timeout/rate-limit ฝั่ง Discord) ไม่ควร crash บอท —
+        # คำสั่งเก่าที่ sync ไว้รอบก่อนยังใช้งานได้ปกติ
+        print(f"discord_say_bot: slash cmd sync failed ({e!r}), "
+              f"logged in as {client.user} anyway",
+              file=sys.stderr, flush=True)
 
 
 async def _voice_autocomplete(
