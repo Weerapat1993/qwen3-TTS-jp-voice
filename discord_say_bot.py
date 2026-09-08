@@ -637,8 +637,34 @@ def _voices_summary() -> str:
 @voice_clone.command(name="list", description="แสดงเสียงทั้งหมดใน voices/")
 async def voice_clone_list(interaction: discord.Interaction) -> None:
     body = _voices_summary().replace("```", "`​`​`")
+    header = "🎙️ เสียงที่มี:\n```\n"
+    footer = "\n```"
+    # Discord content limit = 2000 chars — split body by lines if it doesn't fit.
+    if len(header) + len(body) + len(footer) <= 2000:
+        await interaction.response.send_message(
+            f"{header}{body}{footer}", ephemeral=True)
+        return
+
+    limit = 2000 - len(header) - len(footer)
+    lines = body.split("\n")
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+
     await interaction.response.send_message(
-        f"🎙️ เสียงที่มี:\n```\n{body}\n```", ephemeral=True)
+        f"{header}{chunks[0]}{footer}", ephemeral=True)
+    for chunk in chunks[1:]:
+        await interaction.followup.send(
+            f"```\n{chunk}\n```", ephemeral=True)
 
 
 @voice_clone.command(
