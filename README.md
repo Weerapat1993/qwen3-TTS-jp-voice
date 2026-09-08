@@ -13,7 +13,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | Feature | What it does | Entry point |
 |---------|---------------|--------------|
 | **Voice Cloning** | Clone any voice from a 10-15 second reference `.wav` clip | `main.py` (menu) / `qwen_clone_tts.py` |
-| **Voice Design** | Create a new voice from a text description (e.g. "deep narrator") | `main.py` (menu) |
+| **Voice Design** | Create a new voice from a text description (e.g. "deep narrator") | `main.py` (menu) / `discord_say_bot.py` `/voice-design` |
 | **Custom Voice** | 9 built-in preset voices with emotion + speed control | `main.py` (menu) |
 | **Scriptable CLI** | Generate audio from a single flag-based command, no prompts | `qwen_clone_tts.py --text ...` |
 | **Stdin/file mode** | Read text from a file, switch mood mid-file via `[mood:xxx]` tags, output one audio file | `qwen_clone_tts.py --stdin <in> <out>` |
@@ -26,7 +26,7 @@ Run **Qwen3-TTS** text-to-speech AI locally on your MacBook with Apple Silicon (
 | **launchd service** | Run the daemon as a background macOS service that starts on login | `launchd/com.liino.qwen-tts-daemon.plist` |
 | **100% Local** | Runs entirely on your Mac, no internet required after model download | — |
 | **Optimized for M-Series** | Uses Apple's MLX framework for fast GPU inference | — |
-| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>] [voice:<name>]` — joins your voice channel and speaks with a cloned voice (default voice, or `voice:` to pick one) via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood; `/transcribe` turns an audio upload into paste-ready text; `/voice-clone` create/list/edit/delete/test/set-default manages cloned voices from Discord (upload a clip → auto-transcribed reference) | `discord_say_bot.py` |
+| **Discord voice bot** | Slash command `/say text:<text>` or `/say file:<x.txt>` `[mood:<preset>] [voice:<name>]` — joins your voice channel and speaks with a cloned voice (default voice, or `voice:` to pick one) via the daemon; single-line `text` or a multi-line `.txt` upload, plus emoji auto-mood; `/transcribe` turns an audio upload into paste-ready text; `/voice-clone` create/list/edit/delete/test/set-default manages cloned voices from Discord (upload a clip → auto-transcribed reference); `/voice-design` creates a brand-new voice from a text description and can save it as a permanent voice | `discord_say_bot.py` |
 
 ---
 
@@ -266,7 +266,7 @@ Important caveat: Qwen3-TTS is GPU-bound (Metal) — macOS always prioritizes GP
 
 ## Discord Bot (`discord_say_bot.py`)
 
-Optional Discord bot that adds an application slash command `/say`: pass either `text:<text>` (a single line) or `file:<x.txt>` (a `.txt` attachment for multi-line input), plus an optional `mood:<preset>` and `voice:<name>`. The bot joins the voice channel you're currently in, generates speech with a cloned voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, `resolve_instruct()`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic. A second command, `/transcribe`, converts an uploaded audio file into paste-ready `/say` text (see below).
+Optional Discord bot that adds an application slash command `/say`: pass either `text:<text>` (a single line) or `file:<x.txt>` (a `.txt` attachment for multi-line input), plus an optional `mood:<preset>` and `voice:<name>`. The bot joins the voice channel you're currently in, generates speech with a cloned voice via the background daemon's fast path, and plays it back. It reuses `MAX_CHARS`, `MOOD_PRESETS`, `resolve_instruct()`, and `_try_daemon()` from `qwen_clone_tts.py` directly — no duplicated logic. A second command, `/transcribe`, converts an uploaded audio file into paste-ready `/say` text (see below). `/voice-design` creates a new voice from a text description (see below).
 
 The command tree is synced on `on_ready`. If `DISCORD_GUILD_ID` is set, `/say` is registered to just that guild and appears instantly; otherwise it's registered globally and can take up to ~1 hour to show up the first time.
 
@@ -401,6 +401,31 @@ independently of the bot.
 `/say voice:<name>` (see above) plays any cloned voice, not just the default —
 `/voice-clone set-default` only controls what `/say` uses when `voice:` is
 omitted.
+
+### `/voice-design` — create a voice from a text description
+
+Generate a brand-new voice from a short English description (no reference clip
+needed) using the **VoiceDesign** model
+(`models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit`, download it first). This is the
+`main.py` "Voice Design" mode as a non-interactive slash command.
+
+- **`/voice-design description:<text> text:<sample> [save_as:<name>] [overwrite:<bool>]`**
+  — `description` is used directly as the model `instruct` (voice description,
+  e.g. `"deep calm male narrator"`); `text` is the sample sentence to speak
+  (≤ 300 chars, same `MAX_CHARS` limit as `/voice-clone test`).
+- The reply is always an ephemeral `.wav` attachment — it is **not** played in a
+  voice channel (the use case is auditioning voices).
+- The VoiceDesign model is loaded **inside the bot process** as a lazy
+  singleton (first `/voice-design` call pays the load cost; see ADR-0001) — it
+  is never added to `tts_daemon.py`. Missing model path → ephemeral error.
+- **`save_as:<name>`** — persist the result as a new voice in `voices/`. The
+  generated clip is trimmed/reformatted into a proper reference clip (mono
+  24 kHz, ≤ `REF_TRIM_SECONDS`) via the same `voice_store.prepare_ref_audio()`
+  `/voice-clone create` uses, transcribed with Whisper (STT runs on the
+  *trimmed* clip, not the typed `text`), and `description` is stored as the
+  voice's default `instruct.txt`. Name rules and the `overwrite:` guard for
+  existing / reserved names match `/voice-clone create` exactly. After saving,
+  `/say voice:<name>` uses it with the intended tone.
 
 ---
 

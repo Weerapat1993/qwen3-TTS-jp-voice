@@ -18,6 +18,15 @@ voice channel (หลายบรรทัด/segment จะถูก concat ด
 เป็น export_path จริง (ไม่ใช้ STT/Whisper — ข้อความรู้อยู่แล้วจากที่สั่งพูด) schema
 เดียวกับ hyperframes transcribe (flat array [{id, text, start, end}])
 
+คำสั่งอื่นในบอทนี้:
+`/transcribe file:<เสียง>` = ถอดเสียงเป็นข้อความ + emoji mood พร้อมวางใน `/say`
+`/voice-clone` (group) = สร้าง/จัดการเสียงโคลนใน voices/ (list/set-default/create/edit/delete/test)
+`/voice-design description:<คำบรรยาย> text:<ตัวอย่าง> [save_as:<ชื่อ>] [overwrite:<bool>]` =
+  สร้างเสียงใหม่จากคำบรรยายข้อความ (instruct) ด้วยโมเดล VoiceDesign ที่โหลดใน process
+  ของบอทเอง (lazy singleton — ADR-0001, ไม่แตะ tts_daemon) แล้วแนบไฟล์ .wav กลับเสมอ
+  (ไม่เล่นใน voice channel); `save_as` = บันทึกผลเป็น Voice ถาวรใหม่ใน voices/
+  (trim/reformat เป็น reference clip + STT transcript + เก็บ description เป็น default instruct)
+
 Usage:
     .venv/bin/python discord_say_bot.py
 
@@ -74,6 +83,11 @@ TRANSCRIBE_INLINE_MAX = 1800  # ยาวกว่านี้ -> ส่งเ�
 VOICE_CLONE_MAX_BYTES = 25 * 1024 * 1024
 VOICE_CLONE_EXTS = (".mp3", ".wav", ".m4a", ".ogg")
 VOICE_CLONE_TEST_TEXT = "สวัสดีค่ะ นี่คือตัวอย่างเสียงพูดจากเสียงโคลนนี้"
+
+# /voice-design — โมเดล VoiceDesign (instruct = คำบรรยายเสียงเป็น text แทน ref audio)
+# โหลดใน process ของบอทเองแบบ lazy singleton (ADR-0001) ไม่ยัดเข้า tts_daemon
+VOICE_DESIGN_MODEL_PATH = os.path.join(
+    PROJ, "models", "Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit")
 
 # slash command ไม่ต้องอ่านเนื้อความ -> ใช้ default intents (มี voice_states ที่ต้องใช้
 # อ่าน interaction.user.voice อยู่แล้ว) ห้ามเปิด message_content
@@ -902,6 +916,196 @@ async def voice_clone_test(interaction: discord.Interaction, name: str,
     print(f"discord_say_bot: voice-clone test guild={interaction.guild.id} "
           f"name={clean} mood={mood} chars={len(spoken)} gen_s={gen_s:.2f}",
           file=sys.stderr, flush=True)
+
+
+# ---------- /voice-design ----------
+
+# lazy singleton — โหลดครั้งแรกตอน /voice-design ถูกเรียก แล้ว cache ไว้ใช้ซ้ำ
+# (ADR-0001: โมเดลเฉพาะ feature ฝั่ง Discord อยู่ใน process ของบอทเอง ไม่แตะ
+# daemon protocol ที่ Hermes พึ่งพา)
+_voice_design_model = None
+
+
+def _load_voice_design_model():
+    """โหลด VoiceDesign model (mono singleton) — import load_model แบบ lazy
+    ตรงกับที่ main.py ทำ raise FileNotFoundError ถ้าไม่พบ model path"""
+    global _voice_design_model
+    if _voice_design_model is None:
+        if not os.path.isdir(VOICE_DESIGN_MODEL_PATH):
+            raise FileNotFoundError(
+                f"VoiceDesign model not found at {VOICE_DESIGN_MODEL_PATH}")
+        from mlx_audio.tts.utils import load_model
+        _voice_design_model = load_model(VOICE_DESIGN_MODEL_PATH)
+    return _voice_design_model
+
+
+def _run_voice_design(description: str, text: str, out_wav: str) -> None:
+    """generate เสียงจากคำบรรยาย (instruct) ลงไฟล์ out_wav — blocking,
+    เรียกผ่าน asyncio.to_thread เท่านั้น (ห้าม block event loop)
+
+    pattern เดียวกับ main.py run_design_session / qwen_clone_tts._run:
+    generate_audio เขียนลง dir (ต่อท้าย _NNN) -> ย้ายไฟล์ที่เพิ่งเขียนมาเป็น out_wav
+    """
+    import shutil
+    from mlx_audio.tts.generate import generate_audio
+
+    model = _load_voice_design_model()
+    tmp_dir = tempfile.mkdtemp(prefix="qwen_vd_")
+    try:
+        generate_audio(model=model, text=text, instruct=description,
+                       output_path=tmp_dir)
+        cands = sorted(
+            (os.path.join(tmp_dir, f) for f in os.listdir(tmp_dir)
+             if f.endswith((".wav", ".mp3"))),
+            key=os.path.getmtime)
+        if not cands:
+            raise RuntimeError("no audio produced")
+        shutil.move(cands[-1], out_wav)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@tree.command(
+    name="voice-design",
+    description="สร้างเสียงใหม่จากคำบรรยายข้อความ (ไม่ต้องมีไฟล์เสียงอ้างอิง)")
+@app_commands.guild_only()
+@app_commands.describe(
+    description="คำบรรยายเสียงที่ต้องการ (สั้น, อังกฤษ) เช่น 'deep calm male narrator'",
+    text="ข้อความตัวอย่างที่จะพูด",
+    save_as="ถ้าระบุ = บันทึกผลเป็นเสียงถาวรใหม่ใน voices/ (a-z, 0-9, _)",
+    overwrite="ทับเสียงชื่อเดิมถ้ามีอยู่แล้ว (ใช้คู่กับ save_as)")
+async def voice_design(interaction: discord.Interaction, description: str,
+                       text: str, save_as: str | None = None,
+                       overwrite: bool = False) -> None:
+    spoken = text.strip()
+    if not spoken:
+        await interaction.response.send_message(
+            "ต้องระบุ `text:` เป็นข้อความตัวอย่างที่จะพูด", ephemeral=True)
+        return
+    if len(spoken) > MAX_CHARS:
+        await interaction.response.send_message(
+            f"ข้อความยาวเกิน {MAX_CHARS} ตัวอักษร", ephemeral=True)
+        return
+
+    # save_as: sanitize + เช็ค reserved/exists เหมือน /voice-clone create ทุกประการ
+    clean: str | None = None
+    if save_as is not None:
+        try:
+            clean = voice_store.sanitize_name(save_as)
+        except VoiceStoreError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        if voice_store.is_reserved(clean) and not overwrite:
+            await interaction.response.send_message(
+                f"⚠️ `{clean}` เป็นเสียง default — ใส่ `overwrite:true` ถ้าตั้งใจจริง",
+                ephemeral=True)
+            return
+        if voice_store.voice_exists(clean) and not overwrite:
+            await interaction.response.send_message(
+                f"⚠️ เสียง `{clean}` มีอยู่แล้ว — ใส่ `overwrite:true` เพื่อทับ",
+                ephemeral=True)
+            return
+
+    if not os.path.isdir(VOICE_DESIGN_MODEL_PATH):
+        await interaction.response.send_message(
+            "⚠️ ไม่พบโมเดล VoiceDesign — โหลด "
+            "`models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit` ก่อนใช้คำสั่งนี้",
+            ephemeral=True)
+        return
+
+    # โหลดโมเดล + generate ช้ากว่า 3 วิแน่ -> defer ก่อน (spinner เห็นเฉพาะคนสั่ง)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    wav_path = os.path.join(
+        tempfile.gettempdir(),
+        f"qwen_vd_{os.getpid()}_{int(time.time()*1000)}.wav")
+    t0 = time.time()
+    try:
+        try:
+            await asyncio.to_thread(
+                _run_voice_design, description, spoken, wav_path)
+        except FileNotFoundError as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+        except Exception as e:  # noqa: BLE001
+            print(f"discord_say_bot: voice-design generate error: {e}",
+                  file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                f"สร้างเสียงไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        gen_s = time.time() - t0
+
+        # ไม่บันทึก -> แนบ preview อย่างเดียว (เหมือน /voice-clone test)
+        if clean is None:
+            await interaction.followup.send(
+                f"🎨 ตัวอย่างเสียงที่ออกแบบไว้ (gen {gen_s:.1f}s)\n"
+                f"คำบรรยาย: `{description}`",
+                file=discord.File(wav_path, filename="voice_design.wav"),
+                ephemeral=True)
+            print(f"discord_say_bot: voice-design guild={interaction.guild.id} "
+                  f"chars={len(spoken)} gen_s={gen_s:.2f} save_as=None",
+                  file=sys.stderr, flush=True)
+            return
+
+        # save_as: trim/reformat เป็น reference clip ที่ถูกต้อง (mono 24kHz,
+        # ≤ REF_TRIM_SECONDS) ผ่านฟังก์ชันเดียวกับ /voice-clone create
+        vc_wav, vc_txt, _ = voice_store.voice_paths(clean)
+        try:
+            await asyncio.to_thread(
+                voice_store.prepare_ref_audio, wav_path, vc_wav)
+        except VoiceStoreError as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+
+        # ถอด transcript ของ wav ที่ "trim แล้ว" (ไม่ใช่ text ต้นฉบับ) — ถ้า text
+        # ยาวกว่า REF_TRIM_SECONDS วินาที เฉพาะ transcript ของคลิปที่ถูก trim จริง
+        # เท่านั้นถึงจะตรง (เหตุผลเดียวกับ /voice-clone create)
+        try:
+            lines = await asyncio.to_thread(run_stt, vc_wav, None)
+        except Exception as e:  # noqa: BLE001
+            try:
+                os.remove(vc_wav)
+            except OSError:
+                pass
+            print(f"discord_say_bot: voice-design STT error: {e}",
+                  file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                f"ถอดเสียงอ้างอิงไม่สำเร็จ: {e}", ephemeral=True)
+            return
+        transcript = " ".join(lines).strip()
+        if transcript:
+            with open(vc_txt, "w", encoding="utf-8") as f:
+                f.write(transcript + "\n")
+        elif os.path.exists(vc_txt):
+            # overwrite เสียงเดิมที่เคยมี transcript แต่รอบนี้ถอดได้ว่าง — ลบทิ้ง
+            # ไม่ให้ has_transcript โกหกว่ามี (ไฟล์เก่าค้าง ไม่ตรงเสียงใหม่)
+            os.remove(vc_txt)
+
+        # เก็บ description เป็น default instruction ของเสียงใหม่ ให้ /say ใช้ต่อ
+        # พร้อม tone ที่ตั้งใจไว้ตั้งแต่ออกแบบ
+        voice_store.write_instruction(clean, description)
+
+        if transcript:
+            safe = transcript.replace("```", "`​`​`")
+            body = (f"ตรวจ transcript ที่ถอดได้ (แก้ที่ `voices/{clean}.txt` ได้):\n"
+                    f"```\n{safe}\n```")
+        else:
+            body = ("⚠️ ถอดเสียงอ้างอิงไม่พบข้อความ — ไม่มี transcript ให้ "
+                    f"ใส่เองที่ `voices/{clean}.txt` ก่อนใช้งานจะปลอดภัยกว่า")
+        await interaction.followup.send(
+            f"✅ สร้างเสียง `{clean}` จากคำบรรยาย `{description}` แล้ว "
+            f"(gen {gen_s:.1f}s) — ใช้กับ `/say voice:{clean}` ได้เลย\n{body}",
+            file=discord.File(wav_path, filename=f"{clean}_preview.wav"),
+            ephemeral=True)
+        print(f"discord_say_bot: voice-design guild={interaction.guild.id} "
+              f"chars={len(spoken)} gen_s={gen_s:.2f} save_as={clean} "
+              f"transcript_len={len(transcript)}",
+              file=sys.stderr, flush=True)
+    finally:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
 
 
 def main() -> int:
