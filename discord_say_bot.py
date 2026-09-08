@@ -627,10 +627,8 @@ def _voices_summary() -> str:
     default = voice_store.get_default_voice()
     rows = []
     for v in voices:
-        tag = "" if v["has_transcript"] else " (ไม่มี transcript)"
-        ins = f" — {v['instruction']}" if v["instruction"] else ""
         mark = " (default)" if v["name"] == default else ""
-        rows.append(f"• {v['name']}{tag}{ins}{mark}")
+        rows.append(f"• {v['name']}{mark}")
     return "\n".join(rows)
 
 
@@ -665,6 +663,33 @@ async def voice_clone_list(interaction: discord.Interaction) -> None:
     for chunk in chunks[1:]:
         await interaction.followup.send(
             f"```\n{chunk}\n```", ephemeral=True)
+
+
+@voice_clone.command(name="profile", description="ดูรายละเอียดเสียงหนึ่งตัว")
+@app_commands.describe(name="ชื่อเสียงที่จะดู")
+async def voice_clone_profile(interaction: discord.Interaction,
+                              name: str) -> None:
+    try:
+        clean = voice_store.sanitize_name(name)
+    except VoiceStoreError as e:
+        await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+        return
+    if not voice_store.voice_exists(clean):
+        await interaction.response.send_message(
+            f"⚠️ ไม่พบเสียง `{clean}`", ephemeral=True)
+        return
+
+    _, txt_path, _ = voice_store.voice_paths(clean)
+    has_transcript = os.path.exists(txt_path)
+    instruction = voice_store.read_instruction(clean)
+    is_default = clean == voice_store.get_default_voice()
+
+    lines = [
+        f"🎙️ เสียง `{clean}`{' (default)' if is_default else ''}",
+        f"transcript: {'มี' if has_transcript else 'ไม่มี'}",
+        f"instruction: {instruction or '(ไม่มี)'}",
+    ]
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 @voice_clone.command(
