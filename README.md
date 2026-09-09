@@ -319,6 +319,9 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
   | `worried` | 😟 😧 😦 |
   | `scared` | 😨 😰 🙀 |
   | `confused` | 😕 🤔 😵 |
+  | `flirty` | 😉 😘 🥰 |
+  | `apologetic` | 🙏 😓 🙇 |
+  | `deadpan` | 😶 🫥 💀 |
 
 - The `MAX_CHARS` (300) limit applies **per line** (measured after emoji removal and trimming), matching the daemon's own per-request limit. If any single line is over 300 chars, the whole message is rejected immediately with a readable error naming the offending line number, and nothing is queued. The combined length of all lines is not limited.
 - **Atomic batch** — if any line fails to generate (daemon down mid-batch), no line is played and the temp files are cleaned up.

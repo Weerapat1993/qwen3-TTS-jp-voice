@@ -66,6 +66,14 @@ MOOD_PRESETS: dict[str, str] = {
                  "quick pace, tense pitch with a slight tremble.",
     "confused":  "Confused, puzzled voice. Hesitant, uneven pace, "
                  "rising questioning intonation, slightly slow to process.",
+    "flirty":    "Flirtatious, teasing, playful voice. Warm and coy, "
+                 "with a smiling lilt and an unhurried, suggestive pace.",
+    "apologetic": "Apologetic, sorry, sheepish voice. Soft and sincere, "
+                  "slightly subdued, with a gentle downward intonation.",
+    "deadpan":   "Deadpan, flat, matter-of-fact voice. Dry and "
+                 "expressionless, steady pace, no emotional inflection.",
+    "neutral":   "Neutral, plain, even voice. Calm and clear like a news "
+                 "reader, steady pace, minimal emotion.",
 }
 
 

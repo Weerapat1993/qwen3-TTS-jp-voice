@@ -19,6 +19,7 @@ def test_emoji_mood_covers_expected_moods():
         "excited", "giggle", "surprised", "sad", "angry",
         "sleepy", "whisper", "gentle", "bored", "storyteller",
         "pouty", "shy", "proud", "worried", "scared", "confused",
+        "flirty", "apologetic", "deadpan",
     }
 
 
@@ -143,6 +144,11 @@ def test_emoji_mood_has_no_duplicate_keys():
 
 def test_extract_mood_new_moods_round_trip():
     for mood in ("pouty", "shy", "proud", "worried"):
+        assert extract_mood(f"{MOOD_EMOJI[mood]} ข้อความ") == ("ข้อความ", mood)
+
+
+def test_extract_mood_flirty_apologetic_deadpan_round_trip():
+    for mood in ("flirty", "apologetic", "deadpan"):
         assert extract_mood(f"{MOOD_EMOJI[mood]} ข้อความ") == ("ข้อความ", mood)
 
 

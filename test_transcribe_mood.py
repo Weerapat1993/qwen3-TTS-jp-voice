@@ -92,6 +92,22 @@ def test_detect_mood_thai_surprised_eh_not_pouty():
     assert detect_mood("เอ๊ะ เวทีสำหรับริโนะเหรอ") == "surprised"
 
 
+def test_detect_mood_thai_apologetic():
+    assert detect_mood("ขอโทษจริง ๆ นะ เราผิดไปแล้ว") == "apologetic"
+
+
+def test_detect_mood_english_flirty():
+    assert detect_mood("stop it, you tease") == "flirty"
+
+
+def test_detect_mood_thai_deadpan():
+    assert detect_mood("พูดแบบหน้าตายเลยนะเนี่ย") == "deadpan"
+
+
+def test_detect_mood_japanese_deadpan():
+    assert detect_mood("棒読みで返された") == "deadpan"
+
+
 def test_every_keyword_mood_has_canonical_emoji():
     for _needles, mood in MOOD_KEYWORDS:
         assert mood in MOOD_EMOJI, f"{mood!r} has no MOOD_EMOJI entry"
