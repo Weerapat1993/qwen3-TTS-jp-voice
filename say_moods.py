@@ -30,6 +30,13 @@ EMOJI_MOOD: dict[str, str] = {
     "😉": "flirty", "😘": "flirty", "🥰": "flirty",
     "🙏": "apologetic", "😓": "apologetic", "🙇": "apologetic",
     "😶": "deadpan", "🫥": "deadpan", "💀": "deadpan",
+    "😍": "charming", "✨": "charming", "💫": "charming",
+    "😎": "confident", "💪": "confident", "✊": "confident",
+    "🧐": "knowing", "🤨": "knowing", "🤭": "knowing",
+    "😜": "playful", "😝": "playful", "🤪": "playful",
+    "🫶": "warm", "🤍": "warm", "😊": "warm",
+    "🎯": "focused", "🧠": "focused", "👀": "focused",
+    "🧘": "calm", "🍵": "calm", "😇": "calm",
 }
 
 
@@ -56,6 +63,13 @@ MOOD_EMOJI: dict[str, str] = {
     "flirty": "😉",
     "apologetic": "🙏",
     "deadpan": "😶",
+    "charming": "😍",
+    "confident": "😎",
+    "knowing": "🧐",
+    "playful": "😜",
+    "warm": "🫶",
+    "focused": "🎯",
+    "calm": "🧘",
 }
 
 

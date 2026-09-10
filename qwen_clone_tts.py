@@ -74,6 +74,20 @@ MOOD_PRESETS: dict[str, str] = {
                  "expressionless, steady pace, no emotional inflection.",
     "neutral":   "Neutral, plain, even voice. Calm and clear like a news "
                  "reader, steady pace, minimal emotion.",
+    "charming":  "Charming, magnetic idol voice. Warm and endearing "
+                 "with a bright sparkle, inviting and effortless.",
+    "confident": "Confident, self-assured voice. Strong, steady and "
+                 "clear, speaking with certainty and easy authority.",
+    "knowing":   "Knowing, sly voice with a hint of a smile. Calm and "
+                 "deliberate, lightly emphasising the clever beat.",
+    "playful":   "Playful, teasing voice. Light and bouncy, upbeat "
+                 "and mischievous, quick but not rushed.",
+    "warm":      "Warm, friendly, caring voice. Bright and genuine, "
+                 "team-first tone, moderate easy pace.",
+    "focused":   "Focused, clear, purposeful voice. Brisk and precise "
+                 "like walking through a plan, engaged and steady.",
+    "calm":      "Calm, composed, measured voice. Even and unhurried, "
+                 "quietly reassuring, minimal emotional swing.",
 }
 
 

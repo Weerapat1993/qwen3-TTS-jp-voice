@@ -222,6 +222,16 @@ async def _voice_autocomplete(
     return [app_commands.Choice(name=n, value=n) for n in matched]
 
 
+async def _mood_autocomplete(
+        interaction: discord.Interaction,
+        current: str) -> list[app_commands.Choice[str]]:
+    """dynamic autocomplete แทน static Choice list — MOOD_PRESETS เกิน 25 รายการ
+    (Discord limit) แล้ว; filter ด้วย substring ของ current"""
+    current = (current or "").strip().lower()
+    matched = [m for m in sorted(MOOD_PRESETS) if current in m][:25]
+    return [app_commands.Choice(name=m, value=m) for m in matched]
+
+
 @tree.command(name="say",
               description="ให้บอทพูดข้อความใน voice channel ด้วยเสียงโคลน")
 @app_commands.guild_only()
@@ -236,10 +246,9 @@ async def _voice_autocomplete(
     is_transcript="แนบ transcript.json (start/end ต่อบรรทัด คำนวณจากความยาว wav จริง "
                   "แบบ hyperframes transcribe) คู่กับไฟล์เสียง — ต้องใช้กับ export_tts:true")
 @app_commands.choices(
-    mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)],
     language=[app_commands.Choice(name=c, value=c)
               for c in LANG_CODES if c != "auto"])
-@app_commands.autocomplete(voice=_voice_autocomplete)
+@app_commands.autocomplete(voice=_voice_autocomplete, mood=_mood_autocomplete)
 async def say(interaction: discord.Interaction, text: str | None = None,
               mood: str | None = None,
               language: str | None = None,
@@ -510,12 +519,12 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     mood="บังคับ mood ทุกบรรทัด (ไม่เลือก = auto จากข้อความ)",
     language="ภาษาของเสียง (ไม่เลือก = ตรวจอัตโนมัติ, ใช้ภาษาเดียวทั้งไฟล์)")
 @app_commands.choices(
-    mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)],
     language=[
         app_commands.Choice(name="ไทย", value="th"),
         app_commands.Choice(name="ญี่ปุ่น", value="ja"),
         app_commands.Choice(name="อังกฤษ", value="en"),
     ])
+@app_commands.autocomplete(mood=_mood_autocomplete)
 async def transcribe(interaction: discord.Interaction,
                      file: discord.Attachment,
                      mood: str | None = None,
@@ -913,8 +922,7 @@ async def voice_clone_delete(interaction: discord.Interaction, name: str,
     name="ชื่อเสียงที่จะทดสอบ",
     text="ข้อความทดสอบ (ไม่ระบุ = ประโยคเริ่มต้น)",
     mood="โทนเสียง (ไม่ระบุ = ใช้ instruction ประจำเสียง หรือ default)")
-@app_commands.choices(
-    mood=[app_commands.Choice(name=m, value=m) for m in sorted(MOOD_PRESETS)])
+@app_commands.autocomplete(mood=_mood_autocomplete)
 async def voice_clone_test(interaction: discord.Interaction, name: str,
                            text: str | None = None,
                            mood: str | None = None) -> None:
@@ -934,6 +942,12 @@ async def voice_clone_test(interaction: discord.Interaction, name: str,
         return
     # instruct: mood > voice instruction > default (ไม่แตะ resolve_instruct — TTS-1010)
     if mood:
+        # mood มาจาก autocomplete (ไม่ใช่ static choice) — client ส่งค่านอกลิสต์ได้
+        if mood not in MOOD_PRESETS:
+            await interaction.response.send_message(
+                f"⚠️ ไม่รู้จัก mood `{mood}` — เลือกจาก: "
+                f"{', '.join(sorted(MOOD_PRESETS))}", ephemeral=True)
+            return
         instruct = MOOD_PRESETS[mood]
     else:
         instruct = voice_store.read_instruction(clean) or MOOD_PRESETS["default"]

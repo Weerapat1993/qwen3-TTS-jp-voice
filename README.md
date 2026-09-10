@@ -187,6 +187,43 @@ Untagged text is still capped at 300 chars (same limit as `--text`). Insert one 
 
 Exit code `0` = success (`OK <path>` printed to stdout). Non-zero = failure (`ERROR: ...` printed to stderr).
 
+### Mood presets
+
+`--mood NAME` (and `[mood:NAME]` tags in stdin mode) map to a fixed English tone instruction — the single source of truth is `MOOD_PRESETS` in `qwen_clone_tts.py`. `--mood` and `--instruct` are mutually exclusive; a voice's `instruct.txt` is composed *onto* a mood (voice text first, mood trait appended). Prefer adding a new mood here over ad-hoc `--instruct` strings — keep new ones short, English, in the same "trait, trait, pacing" style.
+
+| Mood | Instruction sent to the model |
+|------|-------------------------------|
+| `default` | Cheerful, bright, playful voice. Clear and friendly, natural pace, not childish. |
+| `excited` | Very excited and enthusiastic voice, fast-paced and energetic, sparkling with joy. |
+| `sleepy` | Soft, drowsy, relaxed voice. Slow pace, gentle and low energy, like talking just before falling asleep. |
+| `surprised` | Surprised voice with a gasp of amazement, wide-eyed and astonished, briefly raised pitch. |
+| `sad` | Sad, melancholic voice. Slow, quiet and emotional, with a hint of sniffle, not overly dramatic. |
+| `angry` | Angry, pouty voice. Sharp and huffy like playful irritation, not genuinely hostile. |
+| `whisper` | Soft whispering voice. Very quiet, intimate and close to the microphone, sharing a secret. |
+| `gentle` | Warm, gentle, soothing voice. Kind and calm, comforting, moderate slow pace. |
+| `giggle` | Playful voice mid-giggle, light and bouncy, cheerful with a little laugh in the tone. |
+| `bored` | Bored, unenthusiastic voice. Flat and droning, dragging slightly, with a sigh in the middle, low energy. |
+| `storyteller` | Warm expressive storyteller voice, like narrating a bedtime story. Rich intonation, gentle suspense, slowing down at key moments, inviting the listener in. |
+| `pouty` | Sulky, reluctant, mildly petulant voice. Clipped and flat, slightly dragging, not genuinely angry. |
+| `shy` | Shy, bashful, hesitant voice. Soft and quiet, with small nervous pauses. |
+| `proud` | Proud, pleased, self-assured voice. Warm and steady, chin-up confidence. |
+| `worried` | Worried, anxious, uneasy voice. Slightly hurried and tense, with uneven breath. |
+| `scared` | Scared, frightened voice. Shaky and breathless, quick pace, tense pitch with a slight tremble. |
+| `confused` | Confused, puzzled voice. Hesitant, uneven pace, rising questioning intonation, slightly slow to process. |
+| `flirty` | Flirtatious, teasing, playful voice. Warm and coy, with a smiling lilt and an unhurried, suggestive pace. |
+| `apologetic` | Apologetic, sorry, sheepish voice. Soft and sincere, slightly subdued, with a gentle downward intonation. |
+| `deadpan` | Deadpan, flat, matter-of-fact voice. Dry and expressionless, steady pace, no emotional inflection. |
+| `neutral` | Neutral, plain, even voice. Calm and clear like a news reader, steady pace, minimal emotion. |
+| `charming` | Charming, magnetic idol voice. Warm and endearing with a bright sparkle, inviting and effortless. |
+| `confident` | Confident, self-assured voice. Strong, steady and clear, speaking with certainty and easy authority. |
+| `knowing` | Knowing, sly voice with a hint of a smile. Calm and deliberate, lightly emphasising the clever beat. |
+| `playful` | Playful, teasing voice. Light and bouncy, upbeat and mischievous, quick but not rushed. |
+| `warm` | Warm, friendly, caring voice. Bright and genuine, team-first tone, moderate easy pace. |
+| `focused` | Focused, clear, purposeful voice. Brisk and precise like walking through a plan, engaged and steady. |
+| `calm` | Calm, composed, measured voice. Even and unhurried, quietly reassuring, minimal emotional swing. |
+
+In the Discord bot, `mood:` is an autocomplete field (not a static dropdown) because this list now exceeds Discord's 25-choice limit. `default` and `neutral` have no emoji, so `/transcribe mood:default` emits lines with no prefix; every other mood has an emoji in the [emoji → mood map](#discord-bot-discord_say_botpy) below.
+
 ---
 
 ## Daemon (`tts_daemon.py`)
@@ -295,7 +332,7 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
 - **`voice:<name>`** — override the voice for this call only (autocomplete lists names from `voices/`, filtered as you type — dynamic rather than a static dropdown, so it still works past Discord's 25-choice limit). An unknown/unsanitizable name is rejected with an ephemeral error before anything is queued. Leave it unset to use the default voice set via `/voice-clone set-default` (falls back to `Liino` if none was ever set). If the chosen voice has a stored `instruct.txt`, it's used as the instruct fallback when no `mood`/explicit instruct is given, and it's also *composed* onto `mood:<preset>` (voice text first, mood trait appended) so a voice's gender/timbre stays fixed while the mood trait still applies — before the built-in default (see `resolve_instruct()`).
 - **`/say file:<x.txt>`** — upload a UTF-8 `.txt` attachment (≤ 100 KB) for multi-line input: one line per sentence, real newlines in the file. Same pipeline as `text` (emoji auto-mood, per-line limit, etc.).
 - **You must supply exactly one of `text:` or `file:`** — neither or both is rejected with an ephemeral error before anything is queued. A `file:` that isn't `.txt`, is over 100 KB, or isn't valid UTF-8 is rejected the same way.
-- **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, `pouty`, `shy`, `proud`, `worried`, etc.), picked from the `mood` choice dropdown. Works with both `text:` and `file:`.
+- **`mood:<preset>`** — applies one of the mood presets from `qwen_clone_tts.py` (`excited`, `sleepy`, `whisper`, `storyteller`, `charming`, `confident`, `knowing`, `playful`, `warm`, `focused`, `calm`, etc.), from the `mood` autocomplete (filtered as you type — dynamic rather than a static dropdown, since `MOOD_PRESETS` now exceeds Discord's 25-choice limit). Works with both `text:` and `file:`.
 - **`language:<code>`** — pin the TTS output language (`japanese`, `english`, `chinese`, …) so text isn't mispronounced in the wrong language. Leave it unset for `auto` (the model infers language from the text; Thai always uses `auto`). Applies to every line of a `text:` or `file:` request.
 - **Multi-line handling** — each line is spoken one per sentence, queued in order (each line generated separately, then played back-to-back with a short `SAY_SENTENCE_GAP_S` pause between them). Blank / whitespace-only lines are skipped. There is no cap on the number of lines (longer messages just take longer to generate through the daemon's FIFO queue).
 - **Ephemeral replies** — usage hints and every error (over-limit line, no voice channel, daemon down, etc.) are sent as an ephemeral reply visible only to the command user. On success the queue confirmation (`🔊 เข้าคิวแล้ว N บรรทัด`) is posted to the channel.
@@ -322,6 +359,13 @@ export DISCORD_GUILD_ID=...   # optional — register /say to just this guild (i
   | `flirty` | 😉 😘 🥰 |
   | `apologetic` | 🙏 😓 🙇 |
   | `deadpan` | 😶 🫥 💀 |
+  | `charming` | 😍 ✨ 💫 |
+  | `confident` | 😎 💪 ✊ |
+  | `knowing` | 🧐 🤨 🤭 |
+  | `playful` | 😜 😝 🤪 |
+  | `warm` | 🫶 🤍 😊 |
+  | `focused` | 🎯 🧠 👀 |
+  | `calm` | 🧘 🍵 😇 |
 
 - The `MAX_CHARS` (300) limit applies **per line** (measured after emoji removal and trimming), matching the daemon's own per-request limit. If any single line is over 300 chars, the whole message is rejected immediately with a readable error naming the offending line number, and nothing is queued. The combined length of all lines is not limited.
 - **Atomic batch** — if any line fails to generate (daemon down mid-batch), no line is played and the temp files are cleaned up.

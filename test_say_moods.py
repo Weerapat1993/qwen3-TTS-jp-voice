@@ -20,6 +20,8 @@ def test_emoji_mood_covers_expected_moods():
         "sleepy", "whisper", "gentle", "bored", "storyteller",
         "pouty", "shy", "proud", "worried", "scared", "confused",
         "flirty", "apologetic", "deadpan",
+        "charming", "confident", "knowing", "playful", "warm",
+        "focused", "calm",
     }
 
 
