@@ -43,7 +43,9 @@ Env vars:
     DISCORD_GUILD_ID      (optional) ถ้าตั้ง = register /say เฉพาะ guild นี้ (เห็นทันที);
                           ไม่ตั้ง = global registration (ครั้งแรกรอ propagate ได้ถึง ~1 ชม.)
     VC_IDLE_TIMEOUT_S     (default 60) วินาทีที่รอก่อนออกจาก VC หลังคิวเล่นเสียงว่าง
-    SAY_SENTENCE_GAP_S   (default 0.5) วินาทีที่เว้นเงียบหลังจบแต่ละประโยคก่อนเล่นบรรทัดถัดไป (0 = ปิด)
+    SAY_SENTENCE_GAP_S   (default 1) วินาทีเว้นเงียบหลังจบแต่ละประโยค — ทั้งตอนเล่นใน VC
+                          และตอน export_tts (concat เติม silence ท้ายทุกบรรทัด). 0 = ปิด;
+                          ค่าอื่นถูกบังคับขั้นต่ำ 0.5s ตอน export กันคำท้ายประโยคโดนตัด
     TRANSCRIBE_WHISPER_MODEL  (default mlx-community/whisper-large-v3-turbo) โมเดล Whisper
                           ที่ /transcribe ใช้ถอดเสียง — โหลดครั้งแรก ~1.6 GB ลง HF cache
 """
@@ -407,7 +409,12 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     if export_tts:
         export_path = wav_paths[0]
         tmpdir = None
-        if len(wav_paths) > 1:
+        # ช่องเงียบท้ายทุกประโยค (เหมือน playback ที่ sleep SAY_SENTENCE_GAP_S)
+        # กัน ffmpeg concat ต่อไฟล์ชนกันจนคำท้ายประโยคฟังเหมือนโดนตัดหาย
+        # 0 = ปิดชัดเจน; ไม่งั้นบังคับขั้นต่ำ 0.5s เสมอ กันคำท้ายประโยคหาย
+        gap_s = max(SAY_SENTENCE_GAP_S, 0.5) if SAY_SENTENCE_GAP_S > 0 else 0.0
+        need_ffmpeg = len(wav_paths) > 1 or gap_s > 0
+        if need_ffmpeg:
             import shutil
             import subprocess
             if shutil.which("ffmpeg") is None:
@@ -417,13 +424,34 @@ async def say(interaction: discord.Interaction, text: str | None = None,
                     except OSError:
                         pass
                 await interaction.followup.send(
-                    "⚠️ ต้องมี ffmpeg เพื่อรวมหลายบรรทัดเป็นไฟล์เดียว", ephemeral=True)
+                    "⚠️ ต้องมี ffmpeg เพื่อรวมไฟล์/เติมช่องเงียบท้ายประโยค", ephemeral=True)
                 return
             tmpdir = tempfile.mkdtemp(prefix="qwen_say_export_")
+            silence_path = None
+            if gap_s > 0:
+                silence_path = os.path.join(tmpdir, "gap.wav")
+                sr = await asyncio.to_thread(
+                    subprocess.run,
+                    ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                     "-t", f"{gap_s}", "-c:a", "pcm_s16le", silence_path],
+                    capture_output=True, text=True)
+                if sr.returncode != 0 or not os.path.exists(silence_path):
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    for p in wav_paths:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+                    await interaction.followup.send(
+                        f"⚠️ สร้างช่องเงียบไม่สำเร็จ: {sr.stderr}", ephemeral=True)
+                    return
             list_file = os.path.join(tmpdir, "list.txt")
             with open(list_file, "w", encoding="utf-8") as f:
                 for p in wav_paths:
                     f.write(f"file '{p}'\n")
+                    if silence_path is not None:
+                        f.write(f"file '{silence_path}'\n")
             export_path = os.path.join(tmpdir, "export.wav")
             r = await asyncio.to_thread(
                 subprocess.run,
@@ -445,8 +473,8 @@ async def say(interaction: discord.Interaction, text: str | None = None,
         transcript_path = None
         if is_transcript:
             # timeline จากความยาว wav ต่อบรรทัดจริง (ffprobe) ไม่ใช้ STT — ข้อความ
-            # รู้อยู่แล้วจาก jobs_meta/wav_paths อยู่ index ตรงกัน; ต่อกันแบบ concat
-            # ตรงๆ ไม่มี silence คั่น (ดู ffmpeg concat ด้านบน) จึงบวกสะสมตรงๆ ได้
+            # รู้อยู่แล้วจาก jobs_meta/wav_paths อยู่ index ตรงกัน; concat เติมช่อง
+            # เงียบ gap_s ท้ายทุกบรรทัด (ดู ffmpeg concat ด้านบน) จึงบวก d + gap_s
             try:
                 durations = [await asyncio.to_thread(probe_duration, p)
                              for p in wav_paths]
@@ -456,7 +484,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
                     d = durations[idx]
                     entries.append({"id": f"w{idx}", "text": spoken,
                                      "start": round(t, 3), "end": round(t + d, 3)})
-                    t += d
+                    t += d + gap_s
                 transcript_path = f"{export_path}.transcript.json"
                 with open(transcript_path, "w", encoding="utf-8") as f:
                     json.dump(entries, f, ensure_ascii=False, indent=2)
