@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Discord say bot — slash command
-`/say text:<ข้อความ> | file:<x.txt> [mood:<preset>] [export_tts:true]`
+`/say text:<ข้อความ> | file:<x.txt> [mood:<preset>] [export_tts:true] [save_local:true]`
 
 `text` = ข้อความบรรทัดเดียว, `file` = `.txt` attachment สำหรับข้อความหลายบรรทัด
 (ต้องระบุอย่างใดอย่างหนึ่ง — XOR)
@@ -17,6 +17,11 @@ voice channel (หลายบรรทัด/segment จะถูก concat ด
 อีกไฟล์ — timeline start/end คำนวณจากความยาว (ffprobe) ของแต่ละบรรทัด wav ที่ต่อกัน
 เป็น export_path จริง (ไม่ใช้ STT/Whisper — ข้อความรู้อยู่แล้วจากที่สั่งพูด) schema
 เดียวกับ hyperframes transcribe (flat array [{id, text, start, end}])
+
+`save_local:true` (ต้องคู่กับ `export_tts:true`) = นอกจากแนบไฟล์ในแชทแล้ว
+copy `.wav` (+ `.transcript.json` ถ้ามี `is_transcript:true`) เก็บไว้ในโปรเจกต์ที่
+`outputs/say/<YYYYMMDD_HHMMSS>_<guild_id>.wav` ด้วย — เก็บไฟล์เสียงไว้ใช้ต่อโดยไม่ต้อง
+ไปโหลดจาก Discord attachment
 
 คำสั่งอื่นในบอทนี้:
 `/transcribe file:<เสียง>` = ถอดเสียงเป็นข้อความ + emoji mood พร้อมวางใน `/say`
@@ -246,7 +251,9 @@ async def _mood_autocomplete(
     export_tts="ส่งออกเป็นไฟล์เสียง .wav แนบในแชทแทนการเล่นใน voice channel "
                 "(ไม่ต้องเข้า VC)",
     is_transcript="แนบ transcript.json (start/end ต่อบรรทัด คำนวณจากความยาว wav จริง "
-                  "แบบ hyperframes transcribe) คู่กับไฟล์เสียง — ต้องใช้กับ export_tts:true")
+                  "แบบ hyperframes transcribe) คู่กับไฟล์เสียง — ต้องใช้กับ export_tts:true",
+    save_local="นอกจากแนบในแชท ให้ copy ไฟล์เสียงเก็บไว้ที่ outputs/say/ ในโปรเจกต์ด้วย "
+               "— ต้องใช้กับ export_tts:true")
 @app_commands.choices(
     language=[app_commands.Choice(name=c, value=c)
               for c in LANG_CODES if c != "auto"])
@@ -257,7 +264,8 @@ async def say(interaction: discord.Interaction, text: str | None = None,
               file: discord.Attachment | None = None,
               voice: str | None = None,
               export_tts: bool = False,
-              is_transcript: bool = False) -> None:
+              is_transcript: bool = False,
+              save_local: bool = False) -> None:
     explicit_mood = mood  # ชื่อ preset ที่เลือกจาก dropdown หรือ None
     lang = language or "auto"  # ไม่เลือก = auto (choice list ไม่มี auto)
 
@@ -272,6 +280,12 @@ async def say(interaction: discord.Interaction, text: str | None = None,
         await interaction.response.send_message(
             "`is_transcript:true` ต้องใช้คู่กับ `export_tts:true` — transcript.json "
             "ถอดจากไฟล์เสียงที่ export เท่านั้น", ephemeral=True)
+        return
+
+    if save_local and not export_tts:
+        await interaction.response.send_message(
+            "`save_local:true` ต้องใช้คู่กับ `export_tts:true` — save ไฟล์ที่ export "
+            "ลงเครื่องเท่านั้น", ephemeral=True)
         return
 
     # เลือกเสียง: ระบุ voice: ต้องมีอยู่จริง, ไม่ระบุ = default voice ปัจจุบัน
@@ -494,6 +508,29 @@ async def say(interaction: discord.Interaction, text: str | None = None,
                     f"⚠️ สร้าง transcript.json ไม่สำเร็จ ({e}) — ส่งเฉพาะไฟล์เสียง",
                     ephemeral=True)
 
+        saved_path = None
+        if save_local:
+            # copy ก่อนถึง finally ด้านล่างที่ลบ export_path/transcript_path ทิ้ง —
+            # ไม่ move เพราะยังต้องใช้ export_path ส่งแนบแชทต่อ
+            try:
+                import shutil as _shutil_local
+                save_dir = os.path.join(PROJ, "outputs", "say")
+                os.makedirs(save_dir, exist_ok=True)
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                saved_path = os.path.join(save_dir, f"{stamp}_{interaction.guild.id}.wav")
+                _shutil_local.copy2(export_path, saved_path)
+                if transcript_path is not None:
+                    _shutil_local.copy2(transcript_path, f"{saved_path}.transcript.json")
+                print(f"discord_say_bot: save_local ok guild={interaction.guild.id} "
+                      f"saved_path={saved_path}", file=sys.stderr, flush=True)
+            except OSError as e:
+                saved_path = None
+                print(f"discord_say_bot: save_local error guild={interaction.guild.id} "
+                      f"err={e}", file=sys.stderr, flush=True)
+                await interaction.followup.send(
+                    f"⚠️ save_local ไม่สำเร็จ ({e}) — ยังส่งไฟล์เสียงในแชทตามปกติ",
+                    ephemeral=True)
+
         try:
             files = [discord.File(export_path, filename="narration.wav")]
             if transcript_path is not None:
@@ -515,11 +552,15 @@ async def say(interaction: discord.Interaction, text: str | None = None,
                 import shutil as _shutil
                 _shutil.rmtree(tmpdir, ignore_errors=True)
 
-        await interaction.followup.send("✅ ส่งออกไฟล์เสียงแล้ว", ephemeral=True)
+        ok_msg = "✅ ส่งออกไฟล์เสียงแล้ว"
+        if saved_path is not None:
+            ok_msg += f" (บันทึกไว้ที่ `{os.path.relpath(saved_path, PROJ)}`)"
+        await interaction.followup.send(ok_msg, ephemeral=True)
         print(f"discord_say_bot: exported say guild={interaction.guild.id} "
               f"src={src} lines={len(wav_paths)} gen_s={gen_s:.2f} "
               f"explicit_mood={explicit_mood} lang={lang} chars={total_chars} "
-              f"voice={voice_clean} is_transcript={is_transcript}",
+              f"voice={voice_clean} is_transcript={is_transcript} "
+              f"save_local={save_local} saved_path={saved_path}",
               file=sys.stderr, flush=True)
         return
 
