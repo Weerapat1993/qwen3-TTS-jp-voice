@@ -34,8 +34,11 @@ def probe_duration(audio_path: str) -> float:
         raise RuntimeError(f"ffprobe returned no duration: {out.stdout!r}") from e
 
 
-def transcribe(audio_path: str, language: str | None = None) -> list[str]:
-    """ถอดเสียงไฟล์เป็น list ของข้อความต่อ segment (ตัด segment ว่างทิ้ง คงลำดับ)
+def transcribe(audio_path: str, language: str | None = None) -> list[dict]:
+    """ถอดเสียงไฟล์เป็น list ของ segment {"text", "start", "end"} (ตัด segment ว่างทิ้ง คงลำดับ)
+
+    start/end (วินาที) มาจาก Whisper ตรง ๆ — ไม่ต้องคำนวณเอง ต่างจาก /say ที่ไม่มี
+    STT เลยต้องเดา timeline จากความยาว wav ต่อไฟล์ (ดู discord_say_bot.py is_transcript)
 
     language=None -> ให้ Whisper เดาภาษาเองจากช่วงต้นของเสียง (auto-detect) แล้ว
     ใช้ภาษานั้นทั้งไฟล์ — กันผลปนภาษา เช่นไฟล์ญี่ปุ่นถูกถอดเป็นไทยบางบรรทัด
@@ -51,9 +54,13 @@ def transcribe(audio_path: str, language: str | None = None) -> list[str]:
     if language:
         kwargs["language"] = language
     result = mlx_whisper.transcribe(audio_path, **kwargs)
-    lines: list[str] = []
+    segments: list[dict] = []
     for seg in result.get("segments", []):
         text = (seg.get("text") or "").strip()
         if text:
-            lines.append(text)
-    return lines
+            segments.append({
+                "text": text,
+                "start": round(float(seg.get("start", 0.0)), 3),
+                "end": round(float(seg.get("end", 0.0)), 3),
+            })
+    return segments

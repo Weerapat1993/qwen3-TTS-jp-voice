@@ -673,7 +673,7 @@ async def transcribe(interaction: discord.Interaction,
 
         t0 = time.time()
         try:
-            lines = await asyncio.to_thread(run_stt, audio_path, language)
+            segments = await asyncio.to_thread(run_stt, audio_path, language)
         except Exception as e:  # noqa: BLE001
             print(f"discord_say_bot: transcribe STT error: {e}",
                   file=sys.stderr, flush=True)
@@ -682,22 +682,31 @@ async def transcribe(interaction: discord.Interaction,
             return
         stt_s = time.time() - t0
 
-        if not lines:
+        if not segments:
             await interaction.followup.send(
                 "ถอดเสียงไม่พบข้อความ (เสียงเงียบหรือไม่มีคำพูด)",
                 ephemeral=True)
             return
 
         composed: list[str] = []
-        for line in lines:
-            m = mood or detect_mood(line)
+        transcript_entries: list[dict] = []
+        for idx, seg in enumerate(segments):
+            text = seg["text"]
+            m = mood or detect_mood(text)
             prefix = f"{MOOD_EMOJI[m]} " if m in MOOD_EMOJI else ""
-            composed.append(f"{prefix}{line}")
+            composed.append(f"{prefix}{text}")
+            transcript_entries.append({
+                "id": f"w{idx}", "text": text,
+                "start": seg["start"], "end": seg["end"]})
         body = "\n".join(composed)
 
         txt = discord.File(
             io.BytesIO(body.encode("utf-8")),
             filename=f"transcribe_{interaction.id}.txt")
+        transcript_json = discord.File(
+            io.BytesIO(json.dumps(transcript_entries, ensure_ascii=False,
+                                   indent=2).encode("utf-8")),
+            filename="transcript.json")
         no_ping = discord.AllowedMentions.none()
         # แทรก zero-width space กัน ``` ในเนื้อความทะลุ code fence (ไฟล์แนบใช้ body เดิม);
         # allowed_mentions=none กัน @mention จาก transcript
@@ -705,16 +714,17 @@ async def transcribe(interaction: discord.Interaction,
         view = DeleteMessageView(interaction.user.id)
         if len(body) <= TRANSCRIBE_INLINE_MAX:
             sent_msg = await interaction.channel.send(
-                f"```\n{safe_body}\n```", file=txt, allowed_mentions=no_ping,
-                view=view)
+                f"```\n{safe_body}\n```", files=[txt, transcript_json],
+                allowed_mentions=no_ping, view=view)
         else:
             sent_msg = await interaction.channel.send(
-                "📝 ถอดเสียงเสร็จแล้ว (ข้อความยาว — ดูไฟล์แนบ)", file=txt,
-                allowed_mentions=no_ping, view=view)
+                "📝 ถอดเสียงเสร็จแล้ว (ข้อความยาว — ดูไฟล์แนบ)",
+                files=[txt, transcript_json], allowed_mentions=no_ping,
+                view=view)
         view.message = sent_msg
         await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
         print(f"discord_say_bot: transcribe guild={interaction.guild.id} "
-              f"bytes={file.size} dur_s={duration:.1f} lines={len(lines)} "
+              f"bytes={file.size} dur_s={duration:.1f} lines={len(segments)} "
               f"stt_s={stt_s:.2f} model={WHISPER_MODEL} lang={language or 'auto'} "
               f"explicit_mood={mood}",
               file=sys.stderr, flush=True)
