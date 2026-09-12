@@ -32,6 +32,11 @@ copy `.wav` (+ `.transcript.json` ถ้ามี `is_transcript:true`) เก�
   แนบ .wav/.txt/transcript.json ที่แปลแล้วกลับมาเสมอ (ไม่เล่นใน voice channel)
   แต่ละ entry ใน transcript.json ใส่ `mood` field เองได้ (เช่น "excited") จะเปลี่ยน
   โทนเสียงเฉพาะบรรทัดนั้น — ไม่ใส่ = ใช้ mood: param ของคำสั่ง หรือ default ของ voice
+`/txt-to-json file:<x.txt> [mood]` = แปลงไฟล์ .txt (1 บรรทัด = 1 ประโยค) เป็น
+  transcript.json schema เดียวกับ /transcribe ([{id, text, mood?}], ไม่มี start/end
+  เพราะไม่มีเสียงจริง) — mood ต่อบรรทัดมาจาก [mood:xxx] tag/emoji ในบรรทัดนั้น (แบบ
+  เดียวกับ /say) ไม่งั้นเดาจากคำ (detect_mood เหมือน /transcribe); mood: param ถ้าใส่
+  จะบังคับทับทุกบรรทัด
 `/voice-clone` (group) = สร้าง/จัดการเสียงโคลนใน voices/ (list/set-default/create/edit/delete/test)
 `/voice-design description:<คำบรรยาย> text:<ตัวอย่าง> [save_as:<ชื่อ>] [overwrite:<bool>]` =
   สร้างเสียงใหม่จากคำบรรยายข้อความ (instruct) ด้วยโมเดล VoiceDesign ที่โหลดใน process
@@ -1030,6 +1035,81 @@ async def translate(interaction: discord.Interaction,
           f"lines={len(wav_paths)} target={target} translate_s={translate_s:.2f} "
           f"gen_s={gen_s:.2f} voice={voice_clean} explicit_mood={mood} "
           f"save_local={save_local} saved_path={saved_path}",
+          file=sys.stderr, flush=True)
+
+
+@tree.command(
+    name="txt-to-json",
+    description="แปลงไฟล์ .txt (1 บรรทัด = 1 ประโยค) เป็น transcript.json พร้อมใส่ mood ให้")
+@app_commands.guild_only()
+@app_commands.describe(
+    file="ไฟล์ .txt (1 บรรทัด = 1 ประโยค, UTF-8, ≤100 KB) — รองรับ [mood:xxx] tag "
+         "หรือ emoji นำหน้าบรรทัดเหมือน /say",
+    mood="บังคับ mood ทุกบรรทัด (ไม่เลือก = ใช้ tag/emoji ในบรรทัดนั้นก่อน "
+         "ไม่มีค่อยเดาอัตโนมัติจากข้อความ)")
+@app_commands.autocomplete(mood=_mood_autocomplete)
+async def txt_to_json(interaction: discord.Interaction,
+                      file: discord.Attachment,
+                      mood: str | None = None) -> None:
+    # pre-response validation — error ทุกจุดตรงนี้เป็น ephemeral, ไม่โพสต์ลงแชท
+    name_ok = file.filename.lower().endswith(".txt")
+    type_ok = (file.content_type or "").startswith("text/")
+    if not (name_ok or type_ok):
+        await interaction.response.send_message(
+            "ไฟล์ต้องเป็น `.txt` (UTF-8 text)", ephemeral=True)
+        return
+    if file.size > 100_000:
+        await interaction.response.send_message(
+            "ไฟล์ใหญ่เกิน 100 KB", ephemeral=True)
+        return
+
+    try:
+        raw = await file.read()
+    except discord.DiscordException as e:  # noqa: BLE001
+        await interaction.response.send_message(
+            f"อ่านไฟล์ไม่สำเร็จ: {e}", ephemeral=True)
+        return
+    try:
+        source_text = raw.decode("utf-8-sig")  # -sig = กิน BOM ถ้ามี
+    except UnicodeDecodeError:
+        await interaction.response.send_message(
+            "ไฟล์ต้องเป็น UTF-8 text", ephemeral=True)
+        return
+
+    lines = parse_lines(source_text)
+    if not lines:
+        await interaction.response.send_message(
+            "ไฟล์ว่าง — ไม่มีบรรทัดให้แปลง", ephemeral=True)
+        return
+
+    # mood ต่อบรรทัด: mood param (บังคับทั้ง batch) > [mood:xxx]/emoji ในบรรทัด >
+    # detect_mood เดาจากคำ (เหมือน /transcribe) — ไม่งั้นไม่ใส่ field mood เลย
+    entries: list[dict] = []
+    for idx, line in enumerate(lines):
+        spoken, auto_mood = extract_mood(line)
+        if not spoken:
+            continue  # บรรทัดที่เหลือแต่ emoji/ว่าง -> ข้าม
+        m = mood or auto_mood or detect_mood(spoken)
+        entry = {"id": f"w{idx}", "text": spoken}
+        if m is not None:
+            entry["mood"] = m
+        entries.append(entry)
+    if not entries:
+        await interaction.response.send_message(
+            "ไม่มีข้อความให้แปลง (บรรทัดว่าง/มีแต่ emoji ทั้งหมด)", ephemeral=True)
+        return
+
+    transcript_json = discord.File(
+        io.BytesIO(json.dumps(entries, ensure_ascii=False, indent=2).encode("utf-8")),
+        filename="transcript.json")
+    no_ping = discord.AllowedMentions.none()
+    view = DeleteMessageView(interaction.user.id)
+    await interaction.response.send_message(
+        f"📄 แปลงเป็น transcript.json แล้ว ({len(entries)} บรรทัด)",
+        files=[transcript_json], allowed_mentions=no_ping, view=view)
+    view.message = await interaction.original_response()
+    print(f"discord_say_bot: txt-to-json guild={interaction.guild.id} "
+          f"bytes={file.size} lines={len(entries)} explicit_mood={mood}",
           file=sys.stderr, flush=True)
 
 
