@@ -239,6 +239,36 @@ async def _mood_autocomplete(
     return [app_commands.Choice(name=m, value=m) for m in matched]
 
 
+class DeleteMessageView(discord.ui.View):
+    """ปุ่ม "ลบข้อความ" แนบมากับ message ที่มีไฟล์แนบ (/say export_tts, /transcribe) —
+    ให้คนที่สั่งคำสั่งกดลบเองได้หลังโหลดไฟล์เสร็จ โดยไม่ต้องรอ mod ลบให้"""
+
+    def __init__(self, author_id: int, *, timeout: float | None = 600) -> None:
+        super().__init__(timeout=timeout)
+        self.author_id = author_id
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "ลบได้เฉพาะคนที่สั่งคำสั่งนี้เท่านั้น", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        if self.message is not None:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label="ลบข้อความ", emoji="🗑️",
+                        style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction,
+                      button: discord.ui.Button) -> None:
+        await interaction.message.delete()
+
+
 @tree.command(name="say",
               description="ให้บอทพูดข้อความใน voice channel ด้วยเสียงโคลน")
 @app_commands.guild_only()
@@ -535,8 +565,11 @@ async def say(interaction: discord.Interaction, text: str | None = None,
             files = [discord.File(export_path, filename="narration.wav")]
             if transcript_path is not None:
                 files.append(discord.File(transcript_path, filename="transcript.json"))
-            await interaction.channel.send(
-                f"🔊 ส่งออกเสียงแล้ว ({len(wav_paths)} บรรทัด)", files=files)
+            view = DeleteMessageView(interaction.user.id)
+            sent_msg = await interaction.channel.send(
+                f"🔊 ส่งออกเสียงแล้ว ({len(wav_paths)} บรรทัด)", files=files,
+                view=view)
+            view.message = sent_msg
         finally:
             for p in wav_paths:
                 try:
@@ -669,13 +702,16 @@ async def transcribe(interaction: discord.Interaction,
         # แทรก zero-width space กัน ``` ในเนื้อความทะลุ code fence (ไฟล์แนบใช้ body เดิม);
         # allowed_mentions=none กัน @mention จาก transcript
         safe_body = body.replace("```", "`​`​`")
+        view = DeleteMessageView(interaction.user.id)
         if len(body) <= TRANSCRIBE_INLINE_MAX:
-            await interaction.channel.send(
-                f"```\n{safe_body}\n```", file=txt, allowed_mentions=no_ping)
+            sent_msg = await interaction.channel.send(
+                f"```\n{safe_body}\n```", file=txt, allowed_mentions=no_ping,
+                view=view)
         else:
-            await interaction.channel.send(
+            sent_msg = await interaction.channel.send(
                 "📝 ถอดเสียงเสร็จแล้ว (ข้อความยาว — ดูไฟล์แนบ)", file=txt,
-                allowed_mentions=no_ping)
+                allowed_mentions=no_ping, view=view)
+        view.message = sent_msg
         await interaction.followup.send("✅ เสร็จแล้ว", ephemeral=True)
         print(f"discord_say_bot: transcribe guild={interaction.guild.id} "
               f"bytes={file.size} dur_s={duration:.1f} lines={len(lines)} "
