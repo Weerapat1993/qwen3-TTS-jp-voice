@@ -1,12 +1,14 @@
 anyio==4.12.1
 audioop-lts==0.2.2
 audioread==3.1.0
+beautifulsoup4==4.15.0
 blobfile==3.1.0
 certifi==2026.1.4
 cffi==2.0.0
 charset-normalizer==3.4.4
 click==8.3.1
 decorator==5.2.1
+deep-translator==1.11.4
 discord.py[voice]==2.7.1
 filelock==3.20.3
 fsspec==2026.1.0
@@ -55,6 +57,7 @@ setuptools==84.0.0
 shellingham==1.5.4
 sounddevice==0.5.3
 soundfile==0.13.1
+soupsieve==2.9.2
 soxr==1.0.0
 standard-aifc==3.13.0
 standard-chunk==3.13.0

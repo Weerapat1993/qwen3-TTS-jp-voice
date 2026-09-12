@@ -25,6 +25,13 @@ copy `.wav` (+ `.transcript.json` ถ้ามี `is_transcript:true`) เก�
 
 คำสั่งอื่นในบอทนี้:
 `/transcribe file:<เสียง>` = ถอดเสียงเป็นข้อความ + emoji mood พร้อมวางใน `/say`
+`/translate file:<transcript.json> source:<ja|en|th> target:<en|th> [mood] [voice] [save_local:true]` =
+  แปล transcript.json (จาก `/transcribe`) เป็นภาษาอื่นด้วย MyMemory (deep_translator,
+  ไม่ใช้ API key — สลับมาจาก GoogleTranslator เพราะ Google เว็บฟรีบล็อก IP ง่ายเกินไป;
+  MyMemory ต้องระบุ source ชัดเจน เดา "auto" ไม่ได้) แล้ว gen เสียงใหม่ทับ +
+  แนบ .wav/.txt/transcript.json ที่แปลแล้วกลับมาเสมอ (ไม่เล่นใน voice channel)
+  แต่ละ entry ใน transcript.json ใส่ `mood` field เองได้ (เช่น "excited") จะเปลี่ยน
+  โทนเสียงเฉพาะบรรทัดนั้น — ไม่ใส่ = ใช้ mood: param ของคำสั่ง หรือ default ของ voice
 `/voice-clone` (group) = สร้าง/จัดการเสียงโคลนใน voices/ (list/set-default/create/edit/delete/test)
 `/voice-design description:<คำบรรยาย> text:<ตัวอย่าง> [save_as:<ชื่อ>] [overwrite:<bool>]` =
   สร้างเสียงใหม่จากคำบรรยายข้อความ (instruct) ด้วยโมเดล VoiceDesign ที่โหลดใน process
@@ -85,6 +92,13 @@ SAY_SENTENCE_GAP_S = float(os.environ.get("SAY_SENTENCE_GAP_S", "1"))
 TRANSCRIBE_MAX_BYTES = 20 * 1024 * 1024
 TRANSCRIBE_MAX_DURATION_S = 600
 TRANSCRIBE_INLINE_MAX = 1800  # ยาวกว่านี้ -> ส่งเฉพาะไฟล์แนบ ไม่ preview ในแชท
+
+# /translate limits — transcript.json เป็น text ล้วน ไม่มีทางใหญ่เท่าไฟล์เสียง
+TRANSLATE_MAX_BYTES = 1024 * 1024
+TRANSLATE_TARGETS = ("en", "th")
+# MyMemoryTranslator (deep_translator) ต้อง locale-qualified code เสมอ ไม่รับ
+# "auto" เป็น source (ต่างจาก GoogleTranslator) — ต้องรู้ source language ชัดเจน
+TRANSLATE_LOCALE = {"ja": "ja-JP", "en": "en-GB", "th": "th-TH"}
 
 # /voice-clone limits (TTS-1009)
 VOICE_CLONE_MAX_BYTES = 25 * 1024 * 1024
@@ -269,6 +283,106 @@ class DeleteMessageView(discord.ui.View):
         await interaction.message.delete()
 
 
+class ExportError(Exception):
+    """ffmpeg ไม่มี/ล้มเหลวตอนต่อ wav — ผู้เรียก catch เอง ข้อความ (str(e)) พร้อมส่ง
+    followup ตรงๆ ได้เลย (ไม่มี prefix ⚠️ ผู้เรียกเป็นคนเติม)"""
+
+
+async def _concat_wavs(wav_paths: list[str], gap_s: float) -> tuple[str, str | None]:
+    """ต่อ wav หลายไฟล์เป็นไฟล์เดียวด้วย ffmpeg + เติมช่องเงียบ gap_s ท้ายทุกไฟล์
+    (กันคำท้ายประโยคโดนตัดตอน concat) คืน (export_path, tmpdir) — tmpdir=None ถ้า
+    ไม่ได้สร้าง (กรณีไฟล์เดียว + ไม่มี gap คืน wav_paths[0] ตรงๆ) ผู้เรียกต้อง
+    shutil.rmtree(tmpdir) เองหลังใช้ export_path เสร็จ ถ้า tmpdir ไม่ None"""
+    need_ffmpeg = len(wav_paths) > 1 or gap_s > 0
+    if not need_ffmpeg:
+        return wav_paths[0], None
+
+    import shutil
+    import subprocess
+    if shutil.which("ffmpeg") is None:
+        raise ExportError("ต้องมี ffmpeg เพื่อรวมไฟล์/เติมช่องเงียบท้ายประโยค")
+
+    tmpdir = tempfile.mkdtemp(prefix="qwen_export_")
+    silence_path = None
+    if gap_s > 0:
+        silence_path = os.path.join(tmpdir, "gap.wav")
+        sr = await asyncio.to_thread(
+            subprocess.run,
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+             "-t", f"{gap_s}", "-c:a", "pcm_s16le", silence_path],
+            capture_output=True, text=True)
+        if sr.returncode != 0 or not os.path.exists(silence_path):
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise ExportError(f"สร้างช่องเงียบไม่สำเร็จ: {sr.stderr}")
+
+    list_file = os.path.join(tmpdir, "list.txt")
+    with open(list_file, "w", encoding="utf-8") as f:
+        for p in wav_paths:
+            f.write(f"file '{p}'\n")
+            if silence_path is not None:
+                f.write(f"file '{silence_path}'\n")
+    export_path = os.path.join(tmpdir, "export.wav")
+    r = await asyncio.to_thread(
+        subprocess.run,
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "concat", "-safe", "0", "-i", list_file,
+         "-ar", "24000", "-ac", "1", export_path],
+        capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(export_path):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise ExportError(f"รวมไฟล์เสียงไม่สำเร็จ: {r.stderr}")
+    return export_path, tmpdir
+
+
+async def _build_transcript(wav_paths: list[str], texts: list[str], gap_s: float,
+                            moods: list[str | None] | None = None) -> list[dict]:
+    """สร้าง transcript entries [{id, text, start, end, mood?}] จากความยาว wav
+    จริงต่อบรรทัด (ffprobe) ไม่ใช้ STT — ข้อความรู้อยู่แล้วจากที่ส่งเข้า TTS (index
+    ตรงกับ wav_paths) เหมือน hyperframes transcribe schema
+
+    `moods[idx]` ใส่คีย์ "mood" ต่อ entry เฉพาะตัวที่ไม่ใช่ None — mood field เป็น
+    optional เสมอ (ทั้ง /transcribe และ /translate อ่านมันแบบ entry.get("mood"))
+    เพื่อให้ round-trip ผ่าน /transcribe -> /say -> /translate เก็บโทนเสียงไว้ได้"""
+    durations = [await asyncio.to_thread(probe_duration, p) for p in wav_paths]
+    entries = []
+    t = 0.0
+    for idx, text in enumerate(texts):
+        d = durations[idx]
+        entry = {"id": f"w{idx}", "text": text,
+                 "start": round(t, 3), "end": round(t + d, 3)}
+        if moods is not None and moods[idx] is not None:
+            entry["mood"] = moods[idx]
+        entries.append(entry)
+        t += d + gap_s
+    return entries
+
+
+def _translate_batch(texts: list[str], source: str, target: str) -> list[str]:
+    """แปลหลายบรรทัดผ่าน MyMemory (deep_translator, ไม่ใช้ API key) — เลือกใช้ตัวนี้
+    แทน GoogleTranslator เพราะ Google เว็บฟรี (translate.google.com/translate_a)
+    บล็อก IP ง่ายมาก (bot-detection "unusual traffic") เจอจริงทั้ง dev sandbox และ
+    เครื่องจริงของผู้ใช้ — ตอบ error page เป็น "ข้อความแปล" เฉยๆ ไม่ raise เอง
+
+    MyMemory ไม่รับ source="auto" (ต้องรู้ภาษาต้นทางชัดเจน ผ่าน TRANSLATE_LOCALE)
+    และไม่มี API key ให้ยิงเยอะ (quota free ~5000 ตัวอักษร/วันต่อ IP) — เช็ค marker
+    string ของ error response (มาเป็น text ปกติเหมือน Google ไม่ raise เอง) กัน
+    หลุดไปเข้า TTS เป็นเสียงอ่าน error message ให้ผู้ใช้แทน"""
+    from deep_translator import MyMemoryTranslator
+    result = MyMemoryTranslator(
+        source=TRANSLATE_LOCALE[source], target=TRANSLATE_LOCALE[target],
+    ).translate_batch(texts)
+    for text in result:
+        if not text or "INVALID SOURCE LANGUAGE" in text.upper() or \
+                "INVALID TARGET LANGUAGE" in text.upper() or \
+                "QUERY LENGTH LIMIT" in text.upper() or \
+                "MYMEMORY WARNING" in text.upper():
+            raise RuntimeError(
+                f"MyMemory ปฏิเสธคำขอ: {text} — ลองใหม่อีกครั้งในอีกสักพัก "
+                "(quota ฟรี ~5000 ตัวอักษร/วัน อาจเต็ม)")
+    return result
+
+
 @tree.command(name="say",
               description="ให้บอทพูดข้อความใน voice channel ด้วยเสียงโคลน")
 @app_commands.guild_only()
@@ -399,14 +513,14 @@ async def say(interaction: discord.Interaction, text: str | None = None,
 
     # resolve instruct ทุกบรรทัดก่อน (mood ผิด -> reject ทั้ง batch; ปกติ dropdown
     # จะเลือกผิดไม่ได้ แต่กันไว้เผื่อ client ส่งค่านอก choices มา)
-    jobs_meta: list[tuple[str, str | None]] = []  # (spoken, instruct)
+    jobs_meta: list[tuple[str, str | None, str | None]] = []  # (spoken, mood, instruct)
     for spoken, m in prepared:
         try:
             instruct = resolve_instruct(m, None, voice_instruct)
         except ValueError as e:
             await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
             return
-        jobs_meta.append((spoken, instruct))
+        jobs_meta.append((spoken, m, instruct))
 
     voice_channel = None
     if not export_tts:
@@ -424,7 +538,7 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     # generate ครบทุกบรรทัดก่อน queue — บรรทัดใด fail -> ลบไฟล์ทั้ง batch, ไม่ queue
     t0 = time.time()
     wav_paths: list[str] = []
-    for idx, (spoken, instruct) in enumerate(jobs_meta):
+    for idx, (spoken, _mood, instruct) in enumerate(jobs_meta):
         wav_path = os.path.join(
             tempfile.gettempdir(),
             f"qwen_say_{os.getpid()}_{int(time.time()*1000)}_{idx}.wav")
@@ -451,84 +565,27 @@ async def say(interaction: discord.Interaction, text: str | None = None,
     gen_s = time.time() - t0
 
     if export_tts:
-        export_path = wav_paths[0]
-        tmpdir = None
         # ช่องเงียบท้ายทุกประโยค (เหมือน playback ที่ sleep SAY_SENTENCE_GAP_S)
         # กัน ffmpeg concat ต่อไฟล์ชนกันจนคำท้ายประโยคฟังเหมือนโดนตัดหาย
         # 0 = ปิดชัดเจน; ไม่งั้นบังคับขั้นต่ำ 0.5s เสมอ กันคำท้ายประโยคหาย
         gap_s = max(SAY_SENTENCE_GAP_S, 0.5) if SAY_SENTENCE_GAP_S > 0 else 0.0
-        need_ffmpeg = len(wav_paths) > 1 or gap_s > 0
-        if need_ffmpeg:
-            import shutil
-            import subprocess
-            if shutil.which("ffmpeg") is None:
-                for p in wav_paths:
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-                await interaction.followup.send(
-                    "⚠️ ต้องมี ffmpeg เพื่อรวมไฟล์/เติมช่องเงียบท้ายประโยค", ephemeral=True)
-                return
-            tmpdir = tempfile.mkdtemp(prefix="qwen_say_export_")
-            silence_path = None
-            if gap_s > 0:
-                silence_path = os.path.join(tmpdir, "gap.wav")
-                sr = await asyncio.to_thread(
-                    subprocess.run,
-                    ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                     "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
-                     "-t", f"{gap_s}", "-c:a", "pcm_s16le", silence_path],
-                    capture_output=True, text=True)
-                if sr.returncode != 0 or not os.path.exists(silence_path):
-                    shutil.rmtree(tmpdir, ignore_errors=True)
-                    for p in wav_paths:
-                        try:
-                            os.remove(p)
-                        except OSError:
-                            pass
-                    await interaction.followup.send(
-                        f"⚠️ สร้างช่องเงียบไม่สำเร็จ: {sr.stderr}", ephemeral=True)
-                    return
-            list_file = os.path.join(tmpdir, "list.txt")
-            with open(list_file, "w", encoding="utf-8") as f:
-                for p in wav_paths:
-                    f.write(f"file '{p}'\n")
-                    if silence_path is not None:
-                        f.write(f"file '{silence_path}'\n")
-            export_path = os.path.join(tmpdir, "export.wav")
-            r = await asyncio.to_thread(
-                subprocess.run,
-                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                 "-f", "concat", "-safe", "0", "-i", list_file,
-                 "-ar", "24000", "-ac", "1", export_path],
-                capture_output=True, text=True)
-            if r.returncode != 0 or not os.path.exists(export_path):
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                for p in wav_paths:
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-                await interaction.followup.send(
-                    f"⚠️ รวมไฟล์เสียงไม่สำเร็จ: {r.stderr}", ephemeral=True)
-                return
+        try:
+            export_path, tmpdir = await _concat_wavs(wav_paths, gap_s)
+        except ExportError as e:
+            for p in wav_paths:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
 
         transcript_path = None
         if is_transcript:
-            # timeline จากความยาว wav ต่อบรรทัดจริง (ffprobe) ไม่ใช้ STT — ข้อความ
-            # รู้อยู่แล้วจาก jobs_meta/wav_paths อยู่ index ตรงกัน; concat เติมช่อง
-            # เงียบ gap_s ท้ายทุกบรรทัด (ดู ffmpeg concat ด้านบน) จึงบวก d + gap_s
             try:
-                durations = [await asyncio.to_thread(probe_duration, p)
-                             for p in wav_paths]
-                entries = []
-                t = 0.0
-                for idx, (spoken, _instruct) in enumerate(jobs_meta):
-                    d = durations[idx]
-                    entries.append({"id": f"w{idx}", "text": spoken,
-                                     "start": round(t, 3), "end": round(t + d, 3)})
-                    t += d + gap_s
+                entries = await _build_transcript(
+                    wav_paths, [spoken for spoken, _mood, _instruct in jobs_meta],
+                    gap_s, [m for _spoken, m, _instruct in jobs_meta])
                 transcript_path = f"{export_path}.transcript.json"
                 with open(transcript_path, "w", encoding="utf-8") as f:
                     json.dump(entries, f, ensure_ascii=False, indent=2)
@@ -695,9 +752,14 @@ async def transcribe(interaction: discord.Interaction,
             m = mood or detect_mood(text)
             prefix = f"{MOOD_EMOJI[m]} " if m in MOOD_EMOJI else ""
             composed.append(f"{prefix}{text}")
-            transcript_entries.append({
-                "id": f"w{idx}", "text": text,
-                "start": seg["start"], "end": seg["end"]})
+            entry = {"id": f"w{idx}", "text": text,
+                      "start": seg["start"], "end": seg["end"]}
+            if m is not None:
+                # เก็บ mood ที่ตรวจ/บังคับได้ไว้ใน transcript.json ด้วย (ตรงกับ
+                # MOOD_PRESETS เสมอ — detect_mood คืนแต่ key ที่รู้จัก) ให้ /say
+                # กับ /translate อ่านต่อได้ทันทีโดยไม่ต้อง detect ซ้ำ
+                entry["mood"] = m
+            transcript_entries.append(entry)
         body = "\n".join(composed)
 
         txt = discord.File(
@@ -733,6 +795,242 @@ async def transcribe(interaction: discord.Interaction,
             os.remove(audio_path)
         except OSError:
             pass
+
+
+@tree.command(
+    name="translate",
+    description="แปล transcript.json (จาก /transcribe) เป็นภาษาอื่น แล้ว gen เสียงเลย")
+@app_commands.guild_only()
+@app_commands.describe(
+    file="transcript.json จาก /transcribe (JSON array [{id, text, start, end}])",
+    source="ภาษาต้นทางของ transcript.json (MyMemory ต้องรู้ชัดเจน เดาไม่ได้)",
+    target="ภาษาปลายทางที่จะแปลเป็น",
+    mood="mood เริ่มต้นของทุกบรรทัด — ถ้า entry ใน transcript.json มี `mood` field "
+         "เอง จะใช้ของ entry นั้นแทน (ไม่เลือกทั้งคู่ = เสียงปกติของ voice)",
+    voice="เสียงที่จะใช้ (ไม่เลือก = default voice ที่ตั้งไว้ผ่าน /voice-clone set-default)",
+    save_local="นอกจากแนบในแชท ให้ copy ไฟล์เสียง + transcript.json เก็บไว้ที่ "
+               "outputs/translate/ ในโปรเจกต์ด้วย")
+@app_commands.choices(
+    source=[
+        app_commands.Choice(name="ญี่ปุ่น", value="ja"),
+        app_commands.Choice(name="อังกฤษ", value="en"),
+        app_commands.Choice(name="ไทย", value="th"),
+    ],
+    target=[
+        app_commands.Choice(name="อังกฤษ", value="en"),
+        app_commands.Choice(name="ไทย", value="th"),
+    ])
+@app_commands.autocomplete(voice=_voice_autocomplete, mood=_mood_autocomplete)
+async def translate(interaction: discord.Interaction,
+                    file: discord.Attachment,
+                    source: str,
+                    target: str,
+                    mood: str | None = None,
+                    voice: str | None = None,
+                    save_local: bool = False) -> None:
+    # pre-defer validation — error ทุกจุดตรงนี้เป็น ephemeral, ไม่โพสต์ลงแชท
+    if not file.filename.lower().endswith(".json"):
+        await interaction.response.send_message(
+            "ไฟล์ต้องเป็น `transcript.json` จาก `/transcribe`", ephemeral=True)
+        return
+    if file.size > TRANSLATE_MAX_BYTES:
+        await interaction.response.send_message(
+            "ไฟล์ใหญ่เกิน 1 MB", ephemeral=True)
+        return
+
+    if voice is not None:
+        try:
+            voice_clean = voice_store.sanitize_name(voice)
+        except VoiceStoreError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        if not voice_store.voice_exists(voice_clean):
+            await interaction.response.send_message(
+                f"⚠️ ไม่พบเสียง `{voice_clean}`", ephemeral=True)
+            return
+    else:
+        voice_clean = voice_store.get_default_voice()
+    voice_instruct = voice_store.read_instruction(voice_clean)
+
+    try:
+        raw = await file.read()
+    except discord.DiscordException as e:  # noqa: BLE001
+        await interaction.response.send_message(
+            f"ดาวน์โหลดไฟล์ไม่สำเร็จ: {e}", ephemeral=True)
+        return
+    try:
+        entries = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        await interaction.response.send_message(
+            f"ไฟล์ต้องเป็น transcript.json ที่ถูกต้อง (JSON, UTF-8): {e}",
+            ephemeral=True)
+        return
+    if not isinstance(entries, list) or not entries or not all(
+            isinstance(e, dict) and isinstance(e.get("text"), str) and e["text"]
+            and (e.get("mood") is None or isinstance(e.get("mood"), str))
+            for e in entries):
+        await interaction.response.send_message(
+            "รูปแบบไฟล์ไม่ตรง — ต้องเป็น JSON array ที่มี `text` ต่อบรรทัด "
+            "(schema เดียวกับ transcript.json จาก /transcribe) `mood` ต่อ entry "
+            "เป็น optional ถ้ามีต้องเป็น string", ephemeral=True)
+        return
+    source_texts = [e["text"] for e in entries]
+
+    # mood ต่อ entry (จาก transcript.json) > mood param (บังคับทั้ง batch) >
+    # default instruct ของ voice — resolve ก่อน defer เพราะเป็น local validation
+    # ล้วน (ไม่ต้องรอ network); ผิดตัวไหน reject ทั้ง batch ระบุ entry นั้น
+    instructs: list[str | None] = []
+    entry_moods: list[str | None] = []
+    for idx, e in enumerate(entries):
+        entry_mood = e.get("mood") or mood
+        try:
+            instructs.append(resolve_instruct(entry_mood, None, voice_instruct))
+        except ValueError as ex:
+            await interaction.response.send_message(
+                f"⚠️ entry ที่ {idx} (id={e.get('id', idx)}): {ex}", ephemeral=True)
+            return
+        entry_moods.append(entry_mood)
+
+    # แปล + gen เสียงหลายบรรทัดช้ากว่า 3 วิแน่ -> defer ก่อน
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    # LANG_CODES (qwen_clone_tts.py) ไม่มี "thai" — target:th ปล่อย auto ให้โมเดล
+    # เดาจากตัวอักษรไทยในข้อความเอง (เหมือน /say ตอนพูดไทย)
+    tts_lang = "english" if target == "en" else "auto"
+
+    t0 = time.time()
+    try:
+        translated_texts = await asyncio.to_thread(
+            _translate_batch, source_texts, source, target)
+    except Exception as e:  # noqa: BLE001 — deep_translator เจอ network/quota/HTML
+                             # error ของ MyMemory หลายแบบ ไม่มี exception class ตายตัว
+        print(f"discord_say_bot: translate error: {e}", file=sys.stderr, flush=True)
+        await interaction.followup.send(f"⚠️ แปลไม่สำเร็จ: {e}", ephemeral=True)
+        return
+    translate_s = time.time() - t0
+
+    over = first_line_over_limit(translated_texts, MAX_CHARS)
+    if over is not None:
+        line_no, line_len = over
+        await interaction.followup.send(
+            f"⚠️ บรรทัดที่ {line_no} หลังแปลยาวเกินไป ({line_len} ตัวอักษร) "
+            f"— จำกัดไม่เกิน {MAX_CHARS} ตัวอักษรต่อบรรทัด", ephemeral=True)
+        return
+
+    t0 = time.time()
+    wav_paths: list[str] = []
+    for idx, (spoken, instruct) in enumerate(zip(translated_texts, instructs)):
+        wav_path = os.path.join(
+            tempfile.gettempdir(),
+            f"qwen_translate_{os.getpid()}_{int(time.time()*1000)}_{idx}.wav")
+        ok = await asyncio.to_thread(
+            _try_daemon, spoken, wav_path, instruct, voice_clean, "wav", tts_lang)
+        if not ok:
+            for p in wav_paths:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+            await interaction.followup.send(
+                "⚠️ TTS daemon ไม่พร้อมใช้งาน (ล่ม/ยังไม่ได้รัน หรือสร้างเสียงไม่สำเร็จ) "
+                "— ไม่มีบรรทัดไหนถูกสร้าง ตรวจ log ของบอท แล้วลองสตาร์ท `tts_daemon.py` ใหม่",
+                ephemeral=True)
+            return
+        wav_paths.append(wav_path)
+    gen_s = time.time() - t0
+
+    # ช่องเงียบท้ายทุกประโยค เหมือน /say export_tts (ดู _concat_wavs)
+    gap_s = max(SAY_SENTENCE_GAP_S, 0.5) if SAY_SENTENCE_GAP_S > 0 else 0.0
+    try:
+        export_path, tmpdir = await _concat_wavs(wav_paths, gap_s)
+    except ExportError as e:
+        for p in wav_paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+        return
+
+    transcript_path = None
+    try:
+        transcript_entries = await _build_transcript(
+            wav_paths, translated_texts, gap_s, entry_moods)
+        transcript_path = f"{export_path}.transcript.json"
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(transcript_entries, f, ensure_ascii=False, indent=2)
+    except Exception as e:  # noqa: BLE001 — ffprobe ล้มเหลว ไม่ทำให้ export เสียงพัง
+        transcript_path = None
+        await interaction.followup.send(
+            f"⚠️ สร้าง transcript.json ไม่สำเร็จ ({e}) — ส่งเฉพาะไฟล์เสียง",
+            ephemeral=True)
+
+    saved_path = None
+    if save_local:
+        # copy ก่อนถึง finally ด้านล่างที่ลบ export_path/transcript_path ทิ้ง —
+        # ไม่ move เพราะยังต้องใช้ export_path ส่งแนบแชทต่อ
+        try:
+            import shutil as _shutil_local
+            save_dir = os.path.join(PROJ, "outputs", "translate")
+            os.makedirs(save_dir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            saved_path = os.path.join(
+                save_dir, f"{stamp}_{interaction.guild.id}_{target}.wav")
+            _shutil_local.copy2(export_path, saved_path)
+            if transcript_path is not None:
+                _shutil_local.copy2(transcript_path, f"{saved_path}.transcript.json")
+            print(f"discord_say_bot: translate save_local ok "
+                  f"guild={interaction.guild.id} saved_path={saved_path}",
+                  file=sys.stderr, flush=True)
+        except OSError as e:
+            saved_path = None
+            print(f"discord_say_bot: translate save_local error "
+                  f"guild={interaction.guild.id} err={e}", file=sys.stderr, flush=True)
+            await interaction.followup.send(
+                f"⚠️ save_local ไม่สำเร็จ ({e}) — ยังส่งไฟล์เสียงในแชทตามปกติ",
+                ephemeral=True)
+
+    try:
+        translated_txt = "\n".join(translated_texts)
+        txt_file = discord.File(
+            io.BytesIO(translated_txt.encode("utf-8")),
+            filename=f"translate_{target}_{interaction.id}.txt")
+        files = [discord.File(export_path, filename=f"translate_{target}.wav"), txt_file]
+        if transcript_path is not None:
+            files.append(discord.File(transcript_path, filename="transcript.json"))
+        view = DeleteMessageView(interaction.user.id)
+        sent_msg = await interaction.channel.send(
+            f"🌐 แปลเป็น `{target}` + gen เสียงเสร็จแล้ว ({len(wav_paths)} บรรทัด)",
+            files=files, view=view)
+        view.message = sent_msg
+    finally:
+        for p in wav_paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        if transcript_path is not None:
+            try:
+                os.remove(transcript_path)
+            except OSError:
+                pass
+        if tmpdir is not None:
+            import shutil as _shutil
+            _shutil.rmtree(tmpdir, ignore_errors=True)
+
+    ok_msg = "✅ แปล + gen เสียงเสร็จแล้ว"
+    if saved_path is not None:
+        ok_msg += f" (บันทึกไว้ที่ `{os.path.relpath(saved_path, PROJ)}`)"
+    await interaction.followup.send(ok_msg, ephemeral=True)
+    print(f"discord_say_bot: translate guild={interaction.guild.id} "
+          f"lines={len(wav_paths)} target={target} translate_s={translate_s:.2f} "
+          f"gen_s={gen_s:.2f} voice={voice_clean} explicit_mood={mood} "
+          f"save_local={save_local} saved_path={saved_path}",
+          file=sys.stderr, flush=True)
 
 
 # ---------- /voice-clone (TTS-1009) ----------
